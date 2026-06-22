@@ -44,11 +44,15 @@ pip install soundfile
 ### 從 Hugging Face 下載
 
 ```python
+import os
 from huggingface_hub import snapshot_download
+from transformers import PreTrainedTokenizerFast
 from bluemagpie import BlueMagpieModel
 
 model_dir = snapshot_download("OpenFormosa/BlueMagpie-TTS", token=True)
-model = BlueMagpieModel.from_local(model_dir, training=False, device="cuda")
+# 直接從 tokenizer.json 載入 tokenizer，兼容較新版 transformers（5.x）
+tokenizer = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
+model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=False, device="cuda")
 ```
 
 ### 從本機目錄載入
@@ -56,9 +60,13 @@ model = BlueMagpieModel.from_local(model_dir, training=False, device="cuda")
 如果你已經有一份模型檔案，直接指向該目錄即可：
 
 ```python
+import os
+from transformers import PreTrainedTokenizerFast
 from bluemagpie import BlueMagpieModel
 
-model = BlueMagpieModel.from_local("checkpoints/bluemagpie", training=False, device="cuda")
+model_dir = "checkpoints/bluemagpie"
+tokenizer = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
+model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=False, device="cuda")
 ```
 
 - `device` 可填 `"cuda"` 或 `"cpu"`，不指定時會自動選擇。
@@ -148,28 +156,21 @@ for chunk in model.generate_streaming(target_text="今天天氣真好。"):
 
 ## 注意事項
 
-- 載入模型時若沒有一併附上 tokenizer，`from_local` 會嘗試從模型目錄自動載入；請確認模型目錄內含對應的 tokenizer 檔案。
+- 上面範例都直接從 `tokenizer.json` 載入 tokenizer 再傳給 `from_local`，在較新版 transformers（5.x）也能穩定運作；背後原因見〈疑難排解〉。
 - 沒有 GPU 也可以執行：把 `device` 設為 `"cpu"` 即可（速度較慢，但短句合成只需數十秒）。輸出為 48 kHz 單聲道。
 - 進行聲音克隆或指定語者合成時，請只使用已取得授權的參考音檔或語者向量。
 - 請妥善保管語者向量表與合成出來的音檔，未經授權前不要對外散布。
 
 ## 疑難排解
 
-**tokenizer 自動載入失敗（較新版 transformers）**
+**較新版 transformers（5.x）的 tokenizer 載入**
 
-若 `from_local` 自動載入 tokenizer 時出現類似
+上面的範例都直接從 `tokenizer.json` 載入 tokenizer 再傳給 `from_local`，因此在 transformers 5.x 也能正常運作，不需額外處理（模型只用到 tokenizer 的 `encode`）。
+
+若你改用 `from_local` 的自動載入（不傳入 `tokenizer`），在 transformers 5.x 可能會失敗 —— 解析 `tokenizer_config.json` 時出現
 
 ```
 TypeError: ..._patch_mistral_regex() got multiple values for keyword argument 'fix_mistral_regex'
 ```
 
-這是 transformers 5.x 在解析模型 `tokenizer_config.json` 時的已知問題。改為自行從 `tokenizer.json` 載入再傳入即可（模型只用到 tokenizer 的 `encode`）：
-
-```python
-import os
-from transformers import PreTrainedTokenizerFast
-from bluemagpie import BlueMagpieModel
-
-tok = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
-model = BlueMagpieModel.from_local(model_dir, tokenizer=tok, training=False, device="cpu")
-```
+或載入看似成功、但呼叫 `generate()` 時才報 `ValueError: No tokenizer attached to BlueMagpieModel`。遇到時改回上面範例的明確載入方式即可。

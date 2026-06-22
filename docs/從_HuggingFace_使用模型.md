@@ -5,14 +5,19 @@
 ## 下載並載入
 
 ```python
+import os
 from huggingface_hub import snapshot_download
+from transformers import PreTrainedTokenizerFast
 from bluemagpie import BlueMagpieModel
 
 model_dir = snapshot_download("OpenFormosa/BlueMagpie-TTS", token=True)
-model = BlueMagpieModel.from_local(model_dir, training=False, device="cuda")
+# 直接從 tokenizer.json 載入 tokenizer，兼容較新版 transformers（5.x）
+tokenizer = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
+model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=False, device="cuda")
 ```
 
 - `token=True` 會使用你本機已登入的 Hugging Face 權杖；私有模型必須先登入並具備存取權限。
+- 範例直接從 `tokenizer.json` 載入 tokenizer 並傳給 `from_local`，在較新版 transformers（5.x）也能正常運作。
 - 載入後即可呼叫 `model.generate(...)` 合成語音，詳細用法請見 [README](../README.md)。
 
 ## 模型目錄包含的檔案
