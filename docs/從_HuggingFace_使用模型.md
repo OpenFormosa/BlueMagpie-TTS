@@ -35,4 +35,4 @@ model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=Fals
 
 ## 使用提醒
 
-進行聲音克隆或指定語者合成時，請只使用已取得授權的參考音檔或語者向量。
+進行聲音複製或指定語者合成時，請只使用已取得授權的參考音檔或語者向量。

@@ -7,7 +7,7 @@
 BlueMagpie-TTS是一套文字轉語音（TTS）模型，能把文字合成為自然的語音。它支援三種使用情境：
 
 - **一般語音合成** —— 直接把文字唸出來。
-- **聲音克隆** —— 提供一段參考音檔，讓輸出模仿該語者的音色。
+- **聲音複製** —— 提供一段參考音檔，讓輸出模仿該語者的音色。
 - **指定語者** —— 用事先準備好的語者向量來控制音色。
 
 同時也提供**串流輸出**，適合需要邊合成邊播放的應用。
@@ -87,7 +87,7 @@ audio = model.generate(
 sf.write("output.wav", audio.squeeze().cpu().numpy(), model.sample_rate)
 ```
 
-## 聲音克隆：以參考音檔模仿語者
+## 聲音複製：以參考音檔模仿語者
 
 提供一段 `reference_wav_path`，輸出就會模仿該段音檔的音色：
 
@@ -152,7 +152,7 @@ for chunk in model.generate_streaming(target_text="今天天氣真好。"):
 | `target_text` | （必填） | 要合成的文字 |
 | `prompt_text` | `""` | 提示文字，搭配 `prompt_wav_path` 做語音接續 |
 | `prompt_wav_path` | `""` | 提示音檔路徑，用於語音接續 |
-| `reference_wav_path` | `""` | 參考音檔路徑，用於聲音克隆 |
+| `reference_wav_path` | `""` | 參考音檔路徑，用於聲音複製 |
 | `speaker_centroid` | `None` | 語者向量，用於指定音色 |
 | `cfg_value` | `2.0` | 引導強度，數值越大越貼合條件、但可能較不自然 |
 | `inference_timesteps` | `10` | 取樣步數，越多通常品質越好、速度越慢 |
@@ -163,7 +163,7 @@ for chunk in model.generate_streaming(target_text="今天天氣真好。"):
 
 - 上面範例都直接從 `tokenizer.json` 載入 tokenizer 再傳給 `from_local`，在較新版 transformers（5.x）也能穩定運作；背後原因見〈疑難排解〉。
 - 沒有 GPU 也可以執行：把 `device` 設為 `"cpu"` 即可（速度較慢，但短句合成只需數十秒）。輸出為 48 kHz 單聲道。
-- 進行聲音克隆或指定語者合成時，請只使用已取得授權的參考音檔或語者向量。
+- 進行聲音複製或指定語者合成時，請只使用已取得授權的參考音檔或語者向量。
 - 請妥善保管語者向量表與合成出來的音檔，未經授權前不要對外散布。
 
 ## 疑難排解
