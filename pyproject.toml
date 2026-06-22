@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bluemagpie-tts"
+version = "0.1.0"
+description = "BlueMagpie-TTS: Barbet as the Text-Semantic LM (TSLM) on top of VoxCPM2's AudioVAE / LocEnc / RALM / LocDiT acoustic stack."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "OpenFormosa" }]
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.44",
+    "einops",
+    "pydantic>=2",
+    "numpy",
+    "tqdm",
+    "safetensors",
+    "librosa",
+    "huggingface_hub",
+    "barbet @ git+https://github.com/OpenFormosa/Barbet.git",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the vendored VoxCPM attribution files (Apache-2.0 LICENSE + provenance)
+# alongside the vendored code in built wheels/sdists.
+[tool.setuptools.package-data]
+"bluemagpie._vendor.voxcpm" = ["LICENSE", "PROVENANCE.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,40 @@
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Python caches / build
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Training / model artifacts (never commit weights, data, or speaker tables)
+checkpoints/
+runs/
+logs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.wav
+*.flac
+*.mp3
+*.parquet
+*.arrow
+data/
+*.jsonl
+
+# Local TTS smoke-test scratch
+_tts_smoke.py
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
