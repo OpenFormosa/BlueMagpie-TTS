@@ -101,17 +101,22 @@ audio = model.generate(
 
 ## 指定語者：以語者向量控制音色
 
-如果你手上有事先算好的語者向量（speaker centroid），可以透過 `speaker_centroid` 指定音色。向量表通常以 `torch.load` 載入後，依語者 ID 取出對應的向量：
+模型自帶李宏毅（Hung-yi Lee）老師的語者向量作為範例（已取得本人授權），存放於模型目錄的 `checkpoints/hung_yi_lee_speaker_centroids.pt`。以 `torch.load` 載入向量表後，依語者 ID `hung_yi_lee` 取出向量，再透過 `speaker_centroid` 指定音色：
 
 ```python
+import os
 import torch
 
-centroids = torch.load("speaker_centroids.pt")
-table = {sid: centroids["centroids"][i] for i, sid in enumerate(centroids["speaker_ids"])}
+centroids = torch.load(
+    os.path.join(model_dir, "checkpoints", "hung_yi_lee_speaker_centroids.pt"),
+    map_location="cpu",
+    weights_only=True,
+)
+speaker_centroid = centroids["centroids"][centroids["speaker_ids"].index("hung_yi_lee")]
 
 audio = model.generate(
     target_text="今天天氣真好。",
-    speaker_centroid=table["<speaker_id>"],   # 也可以直接傳入一段新的語者向量
+    speaker_centroid=speaker_centroid,   # 也可以直接傳入你自己已取得授權的語者向量
     cfg_value=2.0,
 )
 ```
