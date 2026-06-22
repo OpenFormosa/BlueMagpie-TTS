@@ -50,7 +50,7 @@ from transformers import PreTrainedTokenizerFast
 from bluemagpie import BlueMagpieModel
 
 model_dir = snapshot_download("OpenFormosa/BlueMagpie-TTS", token=True)
-# 直接從 tokenizer.json 載入 tokenizer，兼容較新版 transformers（5.x）
+# 直接從 tokenizer.json 載入 tokenizer，相容較新版 transformers（5.x）
 tokenizer = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
 model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=False, device="cuda")
 ```
