@@ -42,10 +42,14 @@ to warm the cache (provably == full forward, like the serving engine), then each
 step advances Barbet/RALM by one position with growing KV + Mamba state. The
 cached Barbet step matches torch `forward_step` to ~`2e-7`.
 
-**Speed** (medium random config, 30 patches): MLX-GPU **2.2×** faster than
-torch-CPU end-to-end; a MiniCPM forward microbenchmark is **~8.8×** over torch-CPU
-and **~2.5×** over torch-MPS. The real (larger) model is more compute-bound, where
-the GPU gap widens.
+**Speed** (medium random config, 30 patches): MLX-GPU **~2.6×** faster than
+torch-CPU end-to-end (2.0× eager, ×1.3 more from the compiled DiT sampler); a
+MiniCPM forward microbenchmark is **~8.8×** over torch-CPU and **~2.5×** over
+torch-MPS. The real (larger) model is more compute-bound, where the GPU gap
+widens. The DiT (the per-patch FLOP dominator, ~`timesteps`×2 small-transformer
+calls) is fused with `mx.compile` (`BlueMagpieMLX._sampler`, cached per
+`(timesteps, cfg)`), and the LongRoPE cos/sin are precomputed as cached `mx`
+constants.
 
 ## Notes
 
@@ -56,7 +60,9 @@ the GPU gap widens.
   (CPU, fp32) accumulate differently, and references mix fused SDPA with
   hand-rolled attention. A real bug shows up as `0.1+`/NaN. The cached step path
   is much tighter (~`2e-7`) since it matches torch's own stepwise math.
-- **Remaining perf options** (not correctness): the selective-scan prefill uses a
-  per-position loop (an associative/chunked scan would speed long prefills);
-  `mx.compile` over the decode step; AudioVAE could move to MLX (it runs once at
-  the end, so the torch↔MLX boundary there is cheap).
+- **Remaining perf options** (not correctness): `mx.compile` the Barbet/RALM
+  decode steps too — needs a functional cache (MLX arrays are immutable, so the
+  growing-KV dict mutation isn't traceable; pass the cache as a pytree in/out and
+  use `shapeless=True`). Also: associative/chunked selective-scan for long
+  prefills; moving the AudioVAE to MLX (it runs once at the end, so its torch↔MLX
+  boundary is cheap). The DiT sampler is already compiled.

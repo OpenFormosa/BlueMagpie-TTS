@@ -279,8 +279,9 @@ sf.write("output.wav", audio.numpy(), model.sample_rate)
   full re-run).
 - `mlx_generate` supports the same four input modes as `generate`; input assembly
   and the AudioVAE decode stay in PyTorch.
-- ~2× faster than torch-CPU end-to-end on a medium config (more on larger models).
-  See [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).
+- ~2.6× faster than torch-CPU end-to-end on a medium config (the DiT sampler is
+  fused with `mx.compile`); more on larger models. See
+  [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).
 
 ## Notes
 

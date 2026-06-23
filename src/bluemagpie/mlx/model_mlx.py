@@ -54,14 +54,36 @@ class BlueMagpieMLX:
 
         self.patch_size = model.patch_size
         self.feat_dim = model.config.feat_dim
+        self._samplers: dict = {}
 
     def _t_span(self, n_timesteps: int, sway: float = 1.0) -> mx.array:
         t = mx.linspace(1, 0, n_timesteps + 1)
         return t + sway * (mx.cos(math.pi / 2 * t) - 1 + t)
 
+    def _sampler(self, n_timesteps: int, cfg_value: float):
+        """A cached ``mx.compile``'d DiT/CFM sampler (z, mu, cond) -> [1, d, p].
+
+        Fuses the whole ~timesteps×2 estimator loop into one graph — the DiT is
+        the per-patch FLOP dominator. Shapes are constant across patches, so it
+        traces once and replays.
+        """
+        key = (n_timesteps, round(float(cfg_value), 6))
+        fn = self._samplers.get(key)
+        if fn is None:
+            t_span = self._t_span(n_timesteps)
+            dit = self.dit
+            cfgv = float(cfg_value)
+
+            def _fn(z, mu, cond):
+                return solve_euler(dit, z, t_span, mu, cond, cfgv)
+
+            fn = mx.compile(_fn)
+            self._samplers[key] = fn
+        return fn
+
     def inference(self, text_token, audio_feat, text_mask, audio_mask, spk_mask=None, speaker_centroids=None,
                   min_len: int = 2, max_len: int = 2000, inference_timesteps: int = 10, cfg_value: float = 2.0,
-                  noises: Optional[List[mx.array]] = None) -> mx.array:
+                  noises: Optional[List[mx.array]] = None, compile: bool = True) -> mx.array:
         # ---- prefill (mirror model._inference) ----
         feat_locenc = self.locenc(audio_feat)                       # [1, L, h_enc]
         feat_embed_tslm = _proj(feat_locenc, self.enc_tslm)
@@ -89,12 +111,20 @@ class BlueMagpieMLX:
 
         pos = int(text_token.shape[1])
         t_span = self._t_span(inference_timesteps)
+        sampler = None
+        if compile:
+            # Warm the DiT decoder's rope cache so the compiled trace hits it.
+            self.dit.decoder._rope(3 + 2 * self.patch_size)
+            sampler = self._sampler(inference_timesteps, cfg_value)
         patches = []
         for i in range(max_len):
             dit_hidden = mx.concatenate([_proj(lm_hidden, self.lm_dit), _proj(residual_hidden, self.res_dit)], axis=-1)
             cond = mx.transpose(prefix_feat_cond, (0, 2, 1))        # [1, d, p]
             z = noises[i] if noises is not None else mx.random.normal((1, self.feat_dim, self.patch_size))
-            pred = solve_euler(self.dit, z, t_span, dit_hidden, cond, cfg_value)   # [1, d, p]
+            if sampler is not None:
+                pred = sampler(z, dit_hidden, cond)                # compiled DiT/CFM
+            else:
+                pred = solve_euler(self.dit, z, t_span, dit_hidden, cond, cfg_value)
             pred_feat = mx.transpose(pred, (0, 2, 1))              # [1, p, d]
 
             curr_locenc = self.locenc(pred_feat[:, None])          # [1, 1, h_enc]

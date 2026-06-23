@@ -36,21 +36,31 @@ class MiniCPMMLX:
         self.num_layers = cfg.num_hidden_layers
         if not self.no_rope:
             rs = cfg.rope_scaling
-            self._short = np.asarray(rs.short_factor, dtype=np.float64)
-            self._long = np.asarray(rs.long_factor, dtype=np.float64)
+            short = np.asarray(rs.short_factor, dtype=np.float64)
+            long = np.asarray(rs.long_factor, dtype=np.float64)
             self._orig = rs.original_max_position_embeddings
-            self._inv_freq = 1.0 / (cfg.rope_theta ** (np.arange(0, self.hd, 2) / self.hd))
+            inv_freq = 1.0 / (cfg.rope_theta ** (np.arange(0, self.hd, 2) / self.hd))
             scale = cfg.max_position_embeddings / self._orig
             self._scaling = math.sqrt(1 + math.log(scale) / math.log(self._orig))
+            # Precompute (inv_freq / ext) as mx constants; rope is then pure-mx
+            # (so the estimator can be mx.compile'd) and cached per seq_len.
+            self._sel_short = mx.array((inv_freq / short).astype(np.float32))
+            self._sel_long = mx.array((inv_freq / long).astype(np.float32))
+            self._rope_cache: dict = {}
 
     def _rope(self, seq_len: int):
-        ext = self._long if seq_len > self._orig else self._short          # [hd/2]
-        t = np.arange(seq_len, dtype=np.float64)
-        freqs = np.outer(t, 1.0 / ext) * self._inv_freq                    # [seq, hd/2]
-        emb = np.concatenate([freqs, freqs], axis=-1)                      # [seq, hd]
-        cos = (np.cos(emb) * self._scaling).astype(np.float32)
-        sin = (np.sin(emb) * self._scaling).astype(np.float32)
-        return mx.array(cos), mx.array(sin)
+        cached = self._rope_cache.get(seq_len)
+        if cached is not None:
+            return cached
+        sel = self._sel_long if seq_len > self._orig else self._sel_short  # [hd/2]
+        t = mx.arange(seq_len, dtype=mx.float32)
+        freqs = t[:, None] * sel[None, :]                                  # [seq, hd/2]
+        emb = mx.concatenate([freqs, freqs], axis=-1)                      # [seq, hd]
+        cos = mx.cos(emb) * self._scaling
+        sin = mx.sin(emb) * self._scaling
+        mx.eval(cos, sin)
+        self._rope_cache[seq_len] = (cos, sin)
+        return cos, sin
 
     def _attn(self, i: int, x: mx.array, is_causal: bool) -> mx.array:
         pre = f"layers.{i}.self_attn."
