@@ -43,13 +43,20 @@ to warm the cache (provably == full forward, like the serving engine), then each
 step advances Barbet/RALM by one position with growing KV + Mamba state. The
 cached Barbet step matches torch `forward_step` to ~`2e-7`.
 
-**Speed** (medium random config, 30 patches): MLX-GPU **~2.6×** faster than
-torch-CPU end-to-end (2.0× eager, ×1.3 more from the compiled DiT sampler); a
-MiniCPM forward microbenchmark is **~8.8×** over torch-CPU and **~2.5×** over
-torch-MPS. The real (larger) model is more compute-bound, where the GPU gap
-widens. The DiT (the per-patch FLOP dominator, ~`timesteps`×2 small-transformer
-calls) is fused with `mx.compile` (`BlueMagpieMLX._sampler`, cached per
-`(timesteps, cfg)`), and the LongRoPE cos/sin are precomputed as cached `mx`
+**Speed — real model end-to-end RTF** (the shipped 7.75 GB model, fp32,
+`timesteps=9`, `cfg=2.8`; RTF = compute / audio seconds, lower is better;
+`scripts/bench_rtf.py`):
+
+| backend | RTF |
+|---|---|
+| **MLX (Apple-Silicon GPU)** | **0.77** (faster than real time) |
+| torch-MPS | 1.12 |
+| torch-CPU | 2.52 |
+
+So **MLX is ~1.45× over torch-MPS and ~3.27× over torch-CPU**, and the only
+backend under RTF 1. The DiT (the per-patch FLOP dominator, ~`timesteps`×2
+small-transformer calls) is fused with `mx.compile` (`BlueMagpieMLX._sampler`,
+cached per `(timesteps, cfg)`); LongRoPE cos/sin are precomputed as cached `mx`
 constants.
 
 ## Notes

@@ -279,9 +279,9 @@ sf.write("output.wav", audio.numpy(), model.sample_rate)
 - Decode uses cached single-step kernels (it advances one position per step, not a
   full re-run).
 - `mlx_generate` supports the same four input modes as `generate`.
-- ~2.6× faster than torch-CPU end-to-end on a medium config (the DiT sampler is
-  fused with `mx.compile`); more on larger models. See
-  [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).
+- On the real 7.75 GB model: end-to-end **RTF 0.77** (faster than real time) —
+  ~**1.45×** over torch-MPS and ~**3.27×** over torch-CPU (fp32,
+  `scripts/bench_rtf.py`). See [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).
 
 ## Notes
 
