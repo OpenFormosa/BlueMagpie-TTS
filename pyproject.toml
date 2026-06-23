@@ -25,6 +25,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Apple-Silicon MLX acceleration (optional; core stays torch-only).
+mlx = ["mlx>=0.20"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

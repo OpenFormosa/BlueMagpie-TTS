@@ -231,6 +231,31 @@ for chunk in engine.stream():
 
 > 一句話總結：我們不追求單一運算比 vLLM 快，而是用 vLLM 級的**批次調度**搭配**針對 DiT 瓶頸的最佳化**，在零額外依賴、跨裝置的前提下提升整體吞吐量。
 
+## Apple Silicon MLX 加速（選用）
+
+在 Apple Silicon（M 系列）上，可改用 **MLX** 原生路徑，直接在 Apple GPU（Metal、統一記憶體）上推論，通常比 PyTorch 的 MPS 後端更快。這是**選用**功能，核心仍維持 torch-only：
+
+```bash
+pip install -e .[mlx]
+```
+
+```python
+from bluemagpie import BlueMagpieModel
+from bluemagpie.mlx import BlueMagpieMLX, mlx_generate
+
+model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, device="cpu")
+mlx_model = BlueMagpieMLX(model)          # 轉換權重（只需一次）
+
+import soundfile as sf
+audio = mlx_generate(model, mlx_model, "今天天氣真好。", seed=0)   # 48 kHz 波形
+sf.write("output.wav", audio.numpy(), model.sample_rate)
+```
+
+- 整條推論路徑（Barbet、RALM、LocEnc、LocDiT／CFM、AR 迴圈）皆以 MLX 重寫，並逐模組對 PyTorch 做數值 parity 驗證。
+- decode 採用快取式單步（cached step），逐步推進、不重算整個序列。
+- `mlx_generate` 支援與 `generate` 相同的四種輸入模式（一般合成、語音接續、參考音檔、語者向量）；輸入組裝與 AudioVAE 解碼沿用 PyTorch。
+- 在中型配置上，端到端約比 torch-CPU 快 2 倍；模型越大、加速越明顯。設計與限制詳見 [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md)。
+
 ## 注意事項
 
 - 上面範例都直接從 `tokenizer.json` 載入 tokenizer 再傳給 `from_local`，在較新版 transformers（5.x）也能穩定運作；背後原因見〈疑難排解〉。

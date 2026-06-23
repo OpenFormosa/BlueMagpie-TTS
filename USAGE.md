@@ -250,6 +250,38 @@ CUDA kernels**:
 > scheduling** plus **DiT-bottleneck optimization** to raise overall throughput
 > with no extra dependencies, across CUDA / MPS / CPU.
 
+## Apple Silicon MLX acceleration (optional)
+
+On Apple Silicon (M-series), a native **MLX** path runs inference directly on the
+Apple GPU (Metal, unified memory) — typically faster than PyTorch's MPS backend.
+It is an optional extra; the core package stays torch-only:
+
+```bash
+pip install -e .[mlx]
+```
+
+```python
+import soundfile as sf
+from bluemagpie import BlueMagpieModel
+from bluemagpie.mlx import BlueMagpieMLX, mlx_generate
+
+model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, device="cpu")
+mlx_model = BlueMagpieMLX(model)          # converts the weights once
+
+audio = mlx_generate(model, mlx_model, "今天天氣真好。", seed=0)   # 48 kHz waveform
+sf.write("output.wav", audio.numpy(), model.sample_rate)
+```
+
+- The whole inference path (Barbet, RALM, LocEnc, LocDiT/CFM, the AR loop) is
+  re-implemented in MLX and numerically parity-checked, module by module, against
+  the PyTorch reference.
+- Decode uses cached single-step kernels (it advances one position per step, not a
+  full re-run).
+- `mlx_generate` supports the same four input modes as `generate`; input assembly
+  and the AudioVAE decode stay in PyTorch.
+- ~2× faster than torch-CPU end-to-end on a medium config (more on larger models).
+  See [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).
+
 ## Notes
 
 - The examples load the tokenizer from `tokenizer.json` and pass it to
