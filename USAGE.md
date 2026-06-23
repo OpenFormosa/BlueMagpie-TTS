@@ -272,13 +272,13 @@ audio = mlx_generate(model, mlx_model, "今天天氣真好。", seed=0)   # 48 k
 sf.write("output.wav", audio.numpy(), model.sample_rate)
 ```
 
-- The whole inference path (Barbet, RALM, LocEnc, LocDiT/CFM, the AR loop) is
-  re-implemented in MLX and numerically parity-checked, module by module, against
-  the PyTorch reference.
+- The whole inference path (Barbet, RALM, LocEnc, LocDiT/CFM, the **AudioVAE
+  decoder**, the AR loop) is re-implemented in MLX and numerically parity-checked,
+  module by module — generation can run torch-free (only tokenization and
+  reference-wav encoding stay in torch).
 - Decode uses cached single-step kernels (it advances one position per step, not a
   full re-run).
-- `mlx_generate` supports the same four input modes as `generate`; input assembly
-  and the AudioVAE decode stay in PyTorch.
+- `mlx_generate` supports the same four input modes as `generate`.
 - ~2.6× faster than torch-CPU end-to-end on a medium config (the DiT sampler is
   fused with `mx.compile`); more on larger models. See
   [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md).

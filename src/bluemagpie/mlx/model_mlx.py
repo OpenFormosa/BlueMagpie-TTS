@@ -17,6 +17,7 @@ from typing import List, Optional
 
 import mlx.core as mx
 
+from .audiovae_mlx import AudioVAEMLX
 from .barbet_mlx import BarbetMLX, _lin, _rms_norm, _silu
 from .convert import to_mx
 from .dit_mlx import LocDiTMLX, solve_euler
@@ -55,6 +56,23 @@ class BlueMagpieMLX:
         self.patch_size = model.patch_size
         self.feat_dim = model.config.feat_dim
         self._samplers: dict = {}
+
+        # Optional MLX AudioVAE (torch-free decode). Falls back to None (torch
+        # decode) for stochastic / unsupported VAEs.
+        self.vae = None
+        vae = getattr(model, "audio_vae", None)
+        if vae is not None:
+            try:
+                self.vae = AudioVAEMLX(vae)
+            except NotImplementedError:
+                self.vae = None
+
+    def decode_latents(self, latents: mx.array) -> mx.array:
+        """Latents ``[T, p, d]`` -> 48 kHz waveform ``[1, 1, samples]`` (MLX)."""
+        if self.vae is None:
+            raise RuntimeError("no MLX AudioVAE attached")
+        feat_pred = latents.transpose(2, 0, 1).reshape(self.feat_dim, -1)[None]   # [1, d, T*p]
+        return self.vae.decode(feat_pred)
 
     def _t_span(self, n_timesteps: int, sway: float = 1.0) -> mx.array:
         t = mx.linspace(1, 0, n_timesteps + 1)
@@ -178,8 +196,13 @@ def mlx_generate(model, mlx_model: "BlueMagpieMLX", target_text: str, *, prompt_
 
     latents = mlx_model.inference(tt, af, txm, aum, spk_mask=sm, speaker_centroids=sc, min_len=min_len,
                                   max_len=max_len, inference_timesteps=inference_timesteps, cfg_value=cfg_value)
-    mx.eval(latents)
 
+    if mlx_model.vae is not None:
+        audio = mlx_model.decode_latents(latents)                  # [1, 1, samples] (torch-free)
+        mx.eval(audio)
+        return torch.from_numpy(np.array(audio)).squeeze(1).squeeze(0)
+
+    mx.eval(latents)
     lt = torch.from_numpy(np.array(latents))                       # [T, p, d]
     feat_pred = lt.permute(2, 0, 1).reshape(model.config.feat_dim, -1)[None]  # [1, d, T*p]
     decode_audio = model.audio_vae.decode(feat_pred.to(torch.float32))

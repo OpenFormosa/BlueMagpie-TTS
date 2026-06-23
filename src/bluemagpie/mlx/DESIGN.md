@@ -34,7 +34,8 @@ All modules pass numerical parity against their PyTorch reference in
 | LocEnc | `locenc_mlx.py` | patch in-proj + special token + non-causal encoder |
 | **LocDiT + CFM** | `dit_mlx.py` | DiT estimator (timestep/delta-time embeddings + in/cond/out proj + decoder) and the **Euler CFG sampler** (`solve_euler`, cfg-zero-star) — the per-patch FLOP dominator |
 | FSQ + Adapter | `layers_mlx.py` | ScalarQuantizationLayer, ProjectionAdapter |
-| **Full AR loop** | `model_mlx.py` | `BlueMagpieMLX.inference` mirrors `model._inference` (cached Barbet/RALM step + per-patch DiT/LocEnc/stop). Parity vs torch `_inference` at ~1e-3/patch with injected noise; `mlx_generate` adds torch input-assembly + AudioVAE decode |
+| **AudioVAE decoder** | `audiovae_mlx.py` | `AudioVAEMLX.decode`: causal conv / transpose-conv (weight-norm) vocoder + Snake + sample-rate conditioning — **torch-free decode** (deterministic; `use_noise_block` must be False) |
+| **Full AR loop** | `model_mlx.py` | `BlueMagpieMLX.inference` mirrors `model._inference` (cached Barbet/RALM step + per-patch DiT/LocEnc/stop). Parity vs torch `_inference` at ~1e-3/patch with injected noise; `mlx_generate` runs the whole pipeline in MLX (input assembly stays torch) |
 | weight conversion | `convert.py` | torch params → `mx.array` flat dict |
 
 **Decode is O(1)/step (cached), not O(T) re-run** — prefill loops the step kernel
@@ -60,9 +61,13 @@ constants.
   (CPU, fp32) accumulate differently, and references mix fused SDPA with
   hand-rolled attention. A real bug shows up as `0.1+`/NaN. The cached step path
   is much tighter (~`2e-7`) since it matches torch's own stepwise math.
-- **Remaining perf options** (not correctness): `mx.compile` the Barbet/RALM
-  decode steps too — needs a functional cache (MLX arrays are immutable, so the
-  growing-KV dict mutation isn't traceable; pass the cache as a pytree in/out and
-  use `shapeless=True`). Also: associative/chunked selective-scan for long
-  prefills; moving the AudioVAE to MLX (it runs once at the end, so its torch↔MLX
-  boundary is cheap). The DiT sampler is already compiled.
+- **`mx.compile` on the LM steps was measured and is NOT worth it.** Unlike
+  CUDA, MLX's eager mode has low launch overhead, so compiling a GEMM-bound layer
+  stack gives no speedup (a 12-layer MLP proxy was ~0.91 ms eager vs ~1.01 ms
+  compiled). The DiT benefited because it is a Python loop of ~16 tiny-op calls
+  (build/launch-bound); the LM step is a single large-GEMM pass that eager
+  already handles well. The DiT sampler is compiled; the LM steps stay eager.
+- **Remaining perf options** (not correctness): associative/chunked
+  selective-scan for long prefills. The AudioVAE is now ported (`audiovae_mlx.py`)
+  so a full run can be torch-free (only input tokenization/wav-encoding stays
+  torch).

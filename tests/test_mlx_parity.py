@@ -221,3 +221,26 @@ def test_full_ar_loop_matches_inference():
     out = np.array(out)
     assert out.shape == ref_gen.shape, f"{out.shape} vs {ref_gen.shape}"
     assert _max_abs_diff(ref_gen, out) < 4e-3
+
+
+# --------------------------------------------------------------------------- #
+# AudioVAE decoder (torch-free MLX decode)
+# --------------------------------------------------------------------------- #
+from bluemagpie._vendor.voxcpm.modules.audiovae import AudioVAEV2, AudioVAEConfigV2  # noqa: E402
+from bluemagpie.mlx.audiovae_mlx import AudioVAEMLX  # noqa: E402
+
+
+@torch.no_grad()
+def test_audiovae_mlx_decode_parity():
+    cfg = AudioVAEConfigV2(
+        encoder_dim=8, encoder_rates=[2, 4], latent_dim=8, decoder_dim=16, decoder_rates=[4, 2],
+        depthwise=True, sample_rate=16000, out_sample_rate=48000, use_noise_block=False,
+        sr_bin_boundaries=[20000, 30000, 40000], cond_type="scale_bias", cond_dim=128, cond_out_layer=False,
+    )
+    torch.manual_seed(0)
+    vae = AudioVAEV2(config=cfg).eval().float()
+    z = torch.randn(1, 8, 5)
+    ref = vae.decode(z.clone()).numpy()
+    out = AudioVAEMLX(vae).decode(to_mx(z))
+    mx.eval(out)
+    assert _max_abs_diff(ref, np.array(out)) < 2e-3

@@ -251,9 +251,9 @@ audio = mlx_generate(model, mlx_model, "今天天氣真好。", seed=0)   # 48 k
 sf.write("output.wav", audio.numpy(), model.sample_rate)
 ```
 
-- 整條推論路徑（Barbet、RALM、LocEnc、LocDiT／CFM、AR 迴圈）皆以 MLX 重寫，並逐模組對 PyTorch 做數值 parity 驗證。
+- 整條推論路徑（Barbet、RALM、LocEnc、LocDiT／CFM、**AudioVAE 解碼器**、AR 迴圈）皆以 MLX 重寫，並逐模組對 PyTorch 做數值 parity 驗證——生成過程可完全不經 PyTorch（僅斷詞與參考音檔編碼仍用 torch）。
 - decode 採用快取式單步（cached step），逐步推進、不重算整個序列。
-- `mlx_generate` 支援與 `generate` 相同的四種輸入模式（一般合成、語音接續、參考音檔、語者向量）；輸入組裝與 AudioVAE 解碼沿用 PyTorch。
+- `mlx_generate` 支援與 `generate` 相同的四種輸入模式（一般合成、語音接續、參考音檔、語者向量）。
 - 在中型配置上，端到端約比 torch-CPU 快 2.6 倍（DiT 取樣器以 `mx.compile` 融合）；模型越大、加速越明顯。設計與限制詳見 [`src/bluemagpie/mlx/DESIGN.md`](src/bluemagpie/mlx/DESIGN.md)。
 
 ## 注意事項
