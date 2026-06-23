@@ -87,15 +87,40 @@ audio = model.generate(
 sf.write("output.wav", audio.squeeze().cpu().numpy(), model.sample_rate)
 ```
 
-## 聲音複製：以參考音檔模仿語者
+## 聲音複製：模仿參考語者的音色
 
-提供一段 `reference_wav_path`，輸出就會模仿該段音檔的音色：
+有兩種做法。
+
+**A. 語者向量（`speaker_centroid`）** —— 從參考音檔抽出語者向量再合成（免逐字稿）：
+
+```bash
+pip install -e ".[clone]"   # 抽取需要 speechbrain（ECAPA-TDNN）
+python scripts/extract_speaker_centroid.py --audio reference.wav --out my_voice.pt
+# 多段同一語者更穩定：--audio a.wav b.wav c.wav
+```
+
+```python
+import torch
+
+centroid = torch.load("my_voice.pt", weights_only=True)   # [192] 語者向量
+audio = model.generate(
+    target_text="今天天氣真好。",
+    speaker_centroid=centroid,
+    cfg_value=2.8,
+)
+
+# 也可以在程式中直接抽取（不寫檔）：
+from bluemagpie import extract_speaker_centroid
+centroid = extract_speaker_centroid("reference.wav")      # [192]
+```
+
+**B. 參考音檔（`reference_wav_path`）** —— 直接提供一段參考音檔：
 
 ```python
 audio = model.generate(
     target_text="今天天氣真好。",
-    reference_wav_path="speaker.wav",
-    cfg_value=2.0,
+    reference_wav_path="reference.wav",
+    cfg_value=2.8,
 )
 ```
 
@@ -143,7 +168,7 @@ for chunk in model.generate_streaming(target_text="今天天氣真好。"):
 | 一般合成 | `target_text` | 直接把文字唸出來 |
 | 語音接續 | `target_text`、`prompt_text`、`prompt_wav_path` | 從一段已有的語音與其文字接著往下唸 |
 | 參考音檔 | `target_text`、`reference_wav_path` | 模仿參考音檔的語者音色 |
-| 參考音檔＋接續 | 以上參數合併使用 | 同時指定音色並接續語音 |
+| 語者向量 | `target_text`、`speaker_centroid` | 以語者向量複製音色 |
 
 ## `generate` 常用參數
 

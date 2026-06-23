@@ -72,15 +72,41 @@ audio = model.generate(target_text="今天天氣真好。", cfg_value=2.0)
 sf.write("output.wav", audio.squeeze().cpu().numpy(), model.sample_rate)
 ```
 
-## Voice cloning: mimic a reference clip
+## Voice cloning: mimic a reference speaker
 
-Pass a `reference_wav_path` and the output mimics that speaker's timbre:
+Two ways.
+
+**A. Speaker vector (`speaker_centroid`)** — extract a vector from the reference
+audio, then synthesize (no transcript needed):
+
+```bash
+pip install -e ".[clone]"   # extraction needs speechbrain (ECAPA-TDNN)
+python scripts/extract_speaker_centroid.py --audio reference.wav --out my_voice.pt
+# more clips of the same speaker -> cleaner centroid: --audio a.wav b.wav c.wav
+```
+
+```python
+import torch
+
+centroid = torch.load("my_voice.pt", weights_only=True)   # [192] speaker vector
+audio = model.generate(
+    target_text="今天天氣真好。",
+    speaker_centroid=centroid,
+    cfg_value=2.8,
+)
+
+# or extract it in-process:
+from bluemagpie import extract_speaker_centroid
+centroid = extract_speaker_centroid("reference.wav")      # [192]
+```
+
+**B. Reference clip (`reference_wav_path`)** — pass a reference clip directly:
 
 ```python
 audio = model.generate(
     target_text="今天天氣真好。",
-    reference_wav_path="speaker.wav",
-    cfg_value=2.0,
+    reference_wav_path="reference.wav",
+    cfg_value=2.8,
 )
 ```
 
@@ -131,7 +157,7 @@ The model supports four input combinations through the same `generate` interface
 | Plain synthesis | `target_text` | Read the text aloud |
 | Continuation | `target_text`, `prompt_text`, `prompt_wav_path` | Continue from an existing clip and its text |
 | Reference clip | `target_text`, `reference_wav_path` | Mimic the reference speaker's timbre |
-| Reference + continuation | the above combined | Set timbre and continue speech at once |
+| Speaker vector | `target_text`, `speaker_centroid` | Clone a voice from a speaker vector |
 
 ## Common `generate` parameters
 

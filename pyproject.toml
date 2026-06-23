@@ -27,6 +27,8 @@ dependencies = [
 dev = ["pytest"]
 # Apple-Silicon MLX acceleration (optional; core stays torch-only).
 mlx = ["mlx>=0.20"]
+# Voice cloning: extract a speaker centroid from reference audio (ECAPA-TDNN).
+clone = ["speechbrain"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
