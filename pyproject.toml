@@ -36,3 +36,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Skip a broken third-party plugin (hydra's antlr4/omegaconf grammar fails to
+# import in some envs); it is unrelated to this package's tests.
+addopts = "-p no:hydra_pytest"

@@ -1,2 +1,3 @@
 include LICENSE
+include USAGE.md
 recursive-include src/bluemagpie/_vendor LICENSE *.md
