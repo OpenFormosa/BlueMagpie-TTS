@@ -31,8 +31,16 @@ model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=Fals
 - `tokenizer.json`、`tokenizer_config.json` —— 斷詞器
 - `README.md`、`USAGE.md` —— 說明文件
 - `release_metadata.json` —— 釋出資訊
+- `checkpoints/speaker_centroids.pt` —— 內附的多語者向量表（`hung_yi_lee`、`female_voice` 兩個語者），用 `speaker_centroid` 指定音色
 
 `from_local` 會自動讀取這些檔案，你不需要手動處理。
+
+## 指定語者
+
+模型內附 `checkpoints/speaker_centroids.pt`（含 `hung_yi_lee`、`female_voice` 兩個語者）。
+依語者 ID 取出 `[192]` 向量、用 `speaker_centroid` 指定音色，完整程式碼見
+[README 的〈指定語者〉](../README.md#指定語者以語者向量控制音色) /
+[USAGE](../USAGE.md#speaker-selection-control-timbre-with-a-speaker-vector)。
 
 ## 使用提醒
 

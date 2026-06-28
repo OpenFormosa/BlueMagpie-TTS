@@ -112,20 +112,32 @@ audio = model.generate(
 
 ## Speaker selection: control timbre with a speaker vector
 
-The model bundles Prof. Hung-yi Lee's speaker vector as an example (used with his
-authorization), at `checkpoints/hung_yi_lee_speaker_centroids.pt`. Load the table
-with `torch.load`, pick the vector by speaker id, and pass `speaker_centroid`:
+The model bundles a **multi-speaker table** at `checkpoints/speaker_centroids.pt`,
+currently holding two speakers:
+
+| speaker id | description | suggested `cfg_value` |
+| --- | --- | --- |
+| `hung_yi_lee` | Prof. Hung-yi Lee's speaker vector (used with his authorization; the official best params are tuned for this speaker) | 2.0–2.8 |
+| `female_voice` | a generic female voice | 2.0–2.8 |
+
+The table has the format `{"speaker_ids": [...], "centroids": tensor[N, 192], "dim": 192}`.
+Load it with `torch.load`, **pick a speaker's `[192]` vector by id**, and pass it as
+`speaker_centroid`:
 
 ```python
 import os
 import torch
 
-centroids = torch.load(
-    os.path.join(model_dir, "checkpoints", "hung_yi_lee_speaker_centroids.pt"),
+table = torch.load(
+    os.path.join(model_dir, "checkpoints", "speaker_centroids.pt"),
     map_location="cpu",
     weights_only=True,
 )
-speaker_centroid = centroids["centroids"][centroids["speaker_ids"].index("hung_yi_lee")]
+print(table["speaker_ids"])          # ['hung_yi_lee', 'female_voice']
+
+# switch speaker by changing this line ("hung_yi_lee" or "female_voice")
+speaker_id = "female_voice"
+speaker_centroid = table["centroids"][table["speaker_ids"].index(speaker_id)]   # [192]
 
 audio = model.generate(
     target_text="今天天氣真好。",
@@ -133,6 +145,21 @@ audio = model.generate(
     cfg_value=2.0,
 )
 ```
+
+If you only have the model id (haven't `snapshot_download`-ed the whole model yet),
+grab just the table:
+
+```python
+from huggingface_hub import hf_hub_download
+
+path = hf_hub_download("OpenFormosa/BlueMagpie-TTS", "checkpoints/speaker_centroids.pt")
+table = torch.load(path, map_location="cpu", weights_only=True)
+```
+
+> To add more speakers, extract your own (authorized) `[192]` vector with
+> `extract_speaker_centroid` from the *Voice cloning* section above — it's passed the
+> exact same way. The earlier single-speaker file
+> `checkpoints/hung_yi_lee_speaker_centroids.pt` (same format) is still available.
 
 ## Streaming output
 

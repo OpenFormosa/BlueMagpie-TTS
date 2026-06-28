@@ -126,18 +126,29 @@ audio = model.generate(
 
 ## 指定語者：以語者向量控制音色
 
-模型自帶李宏毅（Hung-yi Lee）老師的語者向量作為範例（已取得本人授權），存放於模型目錄的 `checkpoints/hung_yi_lee_speaker_centroids.pt`。以 `torch.load` 載入向量表後，依語者 ID `hung_yi_lee` 取出向量，再透過 `speaker_centroid` 指定音色：
+模型自帶一個**多語者向量表** `checkpoints/speaker_centroids.pt`，目前內含兩個語者：
+
+| 語者 ID | 說明 | 建議 `cfg_value` |
+| --- | --- | --- |
+| `hung_yi_lee` | 李宏毅（Hung-yi Lee）老師的語者向量（已取得本人授權；官方最佳參數即針對此語者調校） | 2.0–2.8 |
+| `female_voice` | 一個通用女聲語者向量 | 2.0–2.8 |
+
+向量表的格式為 `{"speaker_ids": [...], "centroids": tensor[N, 192], "dim": 192}`。以 `torch.load` 載入後，**依語者 ID 取出該語者的 `[192]` 向量**，再透過 `speaker_centroid` 指定音色：
 
 ```python
 import os
 import torch
 
-centroids = torch.load(
-    os.path.join(model_dir, "checkpoints", "hung_yi_lee_speaker_centroids.pt"),
+table = torch.load(
+    os.path.join(model_dir, "checkpoints", "speaker_centroids.pt"),
     map_location="cpu",
     weights_only=True,
 )
-speaker_centroid = centroids["centroids"][centroids["speaker_ids"].index("hung_yi_lee")]
+print(table["speaker_ids"])          # ['hung_yi_lee', 'female_voice']
+
+# 切換語者只要改這一行（"hung_yi_lee" 或 "female_voice"）
+speaker_id = "female_voice"
+speaker_centroid = table["centroids"][table["speaker_ids"].index(speaker_id)]   # [192]
 
 audio = model.generate(
     target_text="今天天氣真好。",
@@ -145,6 +156,17 @@ audio = model.generate(
     cfg_value=2.0,
 )
 ```
+
+只用模型 ID（尚未先 `snapshot_download` 整個模型）時，可單獨抓向量表這一個檔：
+
+```python
+from huggingface_hub import hf_hub_download
+
+path = hf_hub_download("OpenFormosa/BlueMagpie-TTS", "checkpoints/speaker_centroids.pt")
+table = torch.load(path, map_location="cpu", weights_only=True)
+```
+
+> 想新增更多語者，用上方〈聲音複製〉的 `extract_speaker_centroid` 抽出你自己（已取得授權）的 `[192]` 向量即可，傳法完全相同。早期僅含李宏毅單一語者的 `checkpoints/hung_yi_lee_speaker_centroids.pt`（格式相同）仍保留可用。
 
 ## 串流輸出
 
