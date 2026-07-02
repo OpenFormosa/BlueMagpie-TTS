@@ -701,7 +701,11 @@ class BlueMagpieModel(nn.Module):
             audio_vae.load_state_dict(vae_state.get("state_dict", vae_state))
 
         model = cls(config, tokenizer, audio_vae, device=device)
-        state = torch.load(os.path.join(path, "pytorch_model.bin"), map_location="cpu", weights_only=True)
+        # mmap keeps the checkpoint memory-mapped instead of materializing a
+        # second full copy in RAM (load peak ~halved; matters on Colab-class hosts).
+        state = torch.load(
+            os.path.join(path, "pytorch_model.bin"), map_location="cpu", weights_only=True, mmap=True
+        )
         missing, unexpected = model.load_state_dict(state, strict=False)
         missing = [k for k in missing if not k.startswith("audio_vae.")]
         if missing or unexpected:

@@ -7,6 +7,7 @@
 **BlueMagpie-TTS** 是一套針對**台灣華語**與**中英混合（code-switching）**情境打造的開源文字轉語音（TTS）模型：像「這個 feature 明天上線」這種台灣日常語句，不必改寫就能自然唸出，輸出 48 kHz 高品質語音。在同一份內部測試集上，它的字元錯誤率（CER）為 7.4%，比參考基準系統的 11.4% **相對降低約 35%**——每合成 100 個字，唸錯的字約從 11 個降到 7 個（數字的意義見〈[效能數據](#效能數據)〉）。
 
 - 🔊 **線上試玩**：[BlueMagpie-TTS Demo（Hugging Face Space）](https://huggingface.co/spaces/voidful/BlueMagpie-TTS-Demo)——不用安裝，開瀏覽器就能聽。
+- 📓 **Colab 筆記本**：[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/OpenFormosa/BlueMagpie-TTS/blob/main/notebooks/BlueMagpie_TTS_Colab.ipynb)——免安裝，在瀏覽器用免費 GPU 跑完整程式流程（合成、聲音複製、長文）。
 - 📦 **模型下載**：[OpenFormosa/BlueMagpie-TTS（Hugging Face）](https://huggingface.co/OpenFormosa/BlueMagpie-TTS)——公開模型，不需申請、不需 token。
 
 ## 它能做什麼
@@ -51,6 +52,8 @@
 | 自動重試（`retry_badcase`） | ✅ | — | — | — |
 
 ## 快速上手
+
+> 不想在本機安裝？直接開 [Colab 筆記本](https://colab.research.google.com/github/OpenFormosa/BlueMagpie-TTS/blob/main/notebooks/BlueMagpie_TTS_Colab.ipynb)，用免費 GPU 跑完下面所有步驟。
 
 **1. 安裝**（需 Python 3.10–3.12）：
 

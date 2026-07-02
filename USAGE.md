@@ -8,6 +8,7 @@ on the same set — a **~35% relative error reduction** (see
 [Evaluation](#evaluation)).
 
 🔊 **Try it online:** [BlueMagpie-TTS Demo (Hugging Face Space)](https://huggingface.co/spaces/voidful/BlueMagpie-TTS-Demo)
+📓 **Run it in your browser:** [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/OpenFormosa/BlueMagpie-TTS/blob/main/notebooks/BlueMagpie_TTS_Colab.ipynb) — the full flow (synthesis, voice cloning, long text) on a free Colab GPU.
 
 ## Supported environments
 
