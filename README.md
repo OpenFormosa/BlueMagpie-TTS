@@ -188,7 +188,7 @@ audio = model.generate(
 )
 ```
 
-> 此路徑自 checkpoint `step_0006000`（2026-07 發佈）起正式訓練支援（內部評測 CER 8.99%）。**更早的 checkpoint 沒有訓練這條路徑，會產生內容錯誤的語音**；請重新執行 `snapshot_download` 取得最新模型。
+> 此路徑自 checkpoint `step_0006000`（2026-07 發佈）起正式支援（內部評測 CER 8.99%）。**更早的 checkpoint 不支援這條路徑，會產生內容錯誤的語音**；請重新執行 `snapshot_download` 取得最新模型。
 
 **B. 語者向量（`speaker_centroid`）** —— 品質最穩定（內部評測 CER 7.44%）：先從參考音檔抽出語者向量再合成，多段參考音檔可平均出更穩的音色：
 
@@ -451,7 +451,7 @@ BlueMagpie-TTS 適合需要「台灣的聲音」的場景：
 
 **聲音複製（`reference_wav_path`）的輸出內容錯誤、像在亂講話**
 
-請確認使用的是 `step_0006000`（2026-07）之後的 checkpoint——更早的 checkpoint 沒有訓練這條路徑。重新執行 `snapshot_download("OpenFormosa/BlueMagpie-TTS")` 會自動更新到最新版。另外，參考音檔請提供 3 秒以上的乾淨人聲。
+請確認使用的是 `step_0006000`（2026-07）之後的 checkpoint——更早的 checkpoint 不支援這條路徑。重新執行 `snapshot_download("OpenFormosa/BlueMagpie-TTS")` 會自動更新到最新版。另外，參考音檔請提供 3 秒以上的乾淨人聲。
 
 **較新版 transformers（5.x）的 tokenizer 載入**
 

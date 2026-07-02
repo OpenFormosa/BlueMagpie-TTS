@@ -115,9 +115,9 @@ audio = model.generate(
 )
 ```
 
-> This path is officially trained starting from checkpoint `step_0006000`
-> (released 2026-07; 8.99% CER on the internal eval). **Earlier checkpoints did
-> not train this path and produce garbled content** — re-run
+> This path is officially supported starting from checkpoint `step_0006000`
+> (released 2026-07; 8.99% CER on the internal eval). **Earlier checkpoints do
+> not support this path and produce garbled content** — re-run
 > `snapshot_download` to get the latest model.
 
 **B. Speaker vector (`speaker_centroid`)** — most stable quality (7.44% CER):
@@ -468,8 +468,8 @@ supports **3.10–3.12**; Python 3.13+ is not yet supported. Dependencies requir
 a fresh virtual environment.
 
 **Voice cloning (`reference_wav_path`) outputs garbled content.** Make sure you
-are on checkpoint `step_0006000` (2026-07) or later — earlier checkpoints did
-not train this path. Re-running `snapshot_download("OpenFormosa/BlueMagpie-TTS")`
+are on checkpoint `step_0006000` (2026-07) or later — earlier checkpoints do
+not support this path. Re-running `snapshot_download("OpenFormosa/BlueMagpie-TTS")`
 updates to the latest revision. Also provide at least 3 seconds of clean speech.
 
 **Tokenizer loading on newer transformers (5.x).** The examples load the
