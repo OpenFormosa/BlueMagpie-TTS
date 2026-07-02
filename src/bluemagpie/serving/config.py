@@ -14,17 +14,18 @@ class EngineConfig:
 
     Defaults are chosen so the engine is numerically equal to
     ``BlueMagpieModel._inference`` at batch=1: ``enforce_eager=True`` disables
-    CUDA graphs / compile, and the generation defaults mirror the shipped
-    ``config.json`` (``inference_timesteps=9``, ``cfg_value=2.8``).
+    CUDA graphs / compile, and the generation defaults follow the model card's
+    recommendation for the current checkpoint (``inference_timesteps=10``,
+    ``cfg_value=2.0``).
     """
 
     # Batching / memory.
     max_num_seqs: int = 16          # rows in the batched cache (concurrency cap)
     max_model_len: int = 2048       # max prompt+generated positions per sequence
 
-    # Generation defaults (shipped config.json generation_defaults).
-    inference_timesteps: int = 9
-    cfg_value: float = 2.8
+    # Generation defaults (model card recommendation for step_0006000).
+    inference_timesteps: int = 10
+    cfg_value: float = 2.0
     min_len: int = 2
     max_len: int = 2000
 

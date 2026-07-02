@@ -8,7 +8,7 @@ Then synthesize in that voice:
     import torch
     from bluemagpie import BlueMagpieModel
     centroid = torch.load("my_voice.pt", weights_only=True)
-    audio = model.generate(target_text="今天天氣真好。", speaker_centroid=centroid, cfg_value=2.8)
+    audio = model.generate(target_text="今天天氣真好。", speaker_centroid=centroid, cfg_value=2.0)
 
 This uses the ``speaker_centroid`` voice-clone path (the same mechanism as the
 bundled hung_yi_lee example).
@@ -39,7 +39,7 @@ def main():
     )
     torch.save(centroid, args.out)
     print(f"saved speaker_centroid (dim={centroid.numel()}, norm={centroid.norm():.3f}) to {args.out}")
-    print(f'use: model.generate(target_text=..., speaker_centroid=torch.load("{args.out}", weights_only=True), cfg_value=2.8)')
+    print(f'use: model.generate(target_text=..., speaker_centroid=torch.load("{args.out}", weights_only=True), cfg_value=2.0)')
 
 
 if __name__ == "__main__":
