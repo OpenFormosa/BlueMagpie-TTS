@@ -13,9 +13,11 @@ qk-norm, optional qk-logit clipping, and the optional attention sink.
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from .convert import torch_params_to_mx
 
@@ -31,8 +33,39 @@ def _silu(x: mx.array) -> mx.array:
 
 
 def _lin(x: mx.array, w: mx.array, b: mx.array = None) -> mx.array:
+    entry = _QUANTIZED.get(id(w))
+    if entry is not None:
+        # Long-sequence prefill runs faster on the plain fp32 GEMM (the
+        # quantized kernel's per-group unpacking dominates there); single-token
+        # AR decode steps win on the fused quantized matmul. model_mlx flips
+        # _PREFILL_FP32 during the prefill phase so the choice is explicit —
+        # a shape heuristic would misroute the DiT (its "sequence" is the
+        # 4-frame patch).
+        fb = entry["fp32"]
+        if fb is not None and _PREFILL_FP32[0]:
+            y = x @ mx.transpose(fb)
+            return y + b if b is not None else y
+        q = entry["q"]
+        out = mx.quantized_matmul(x, q[0], q[1], q[2], transpose=True, group_size=q[3], bits=q[4])
+        return out + b if b is not None else out
     y = x @ mx.transpose(w)
     return y + b if b is not None else y
+
+
+# When True (prefill phase only), registered Linears use their retained fp32
+# weights via plain GEMM; see _lin.
+_PREFILL_FP32: list = [False]
+
+
+# Quantized linear weights, keyed by the id() of the packed array that now
+# occupies the weight slot. ``fp32`` optionally keeps the original weights for
+# the long-sequence fast path (see _lin).
+_QUANTIZED: dict = {}
+
+
+def register_quantized(wq: mx.array, scales: mx.array, biases, group_size: int, bits: int,
+                       fp32_backup: mx.array = None) -> None:
+    _QUANTIZED[id(wq)] = {"q": (wq, scales, biases, group_size, bits), "fp32": fp32_backup}
 
 
 def _rms_norm(x: mx.array, w: mx.array, eps: float) -> mx.array:
@@ -81,7 +114,8 @@ class BarbetMLX:
         self.m_groups = cfg.num_key_value_heads
         self.group_size = self.inner // self.m_groups
         self.group_for_head = mx.array(
-            [h // (self.m_heads // self.m_groups) for h in range(self.m_heads)]
+            [h // (self.m_heads // self.m_groups) for h in range(self.m_heads)],
+            dtype=mx.int32,  # gather indices must be integral (newer mlx defaults lists to float32)
         )
 
         self.rope_scale = None
@@ -103,7 +137,7 @@ class BarbetMLX:
         sin = mx.broadcast_to(mx.sin(emb)[None], (batch, seq_len, self.hd))
         return cos, sin
 
-    def _attn(self, i: int, x: mx.array, cos, sin, window):
+    def _attn(self, i: int, x: mx.array, cos, sin, window, cache=None):
         pre = f"layers.{i}.mixer."
         b, s, _ = x.shape
         q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(b, s, self.nh, self.hd).transpose(0, 2, 1, 3)
@@ -114,6 +148,12 @@ class BarbetMLX:
             k = _rms_norm(k, self.p[pre + "k_norm.weight"], self.eps)
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
+        if cache is not None:
+            # Warm the decode KV cache with the full-prefix keys/values so the
+            # cached AR steps can continue from a full forward (fast prefill).
+            # Stored pre-repeat_kv, matching _attn_step's cache layout.
+            cache["k"][i] = k
+            cache["v"][i] = v
         k = _repeat_kv(k, self.groups)
         v = _repeat_kv(v, self.groups)
 
@@ -156,7 +196,7 @@ class BarbetMLX:
         acc = acc + bias[None, None, :]
         return _silu(acc)
 
-    def _mamba(self, i: int, x: mx.array) -> mx.array:
+    def _mamba(self, i: int, x: mx.array, cache=None) -> mx.array:
         pre = f"layers.{i}.mixer."
         b, s, _ = x.shape
         z = _lin(x, self.p[pre + "in_proj_z.weight"])
@@ -164,6 +204,10 @@ class BarbetMLX:
         bb = _lin(x, self.p[pre + "in_proj_b.weight"])
         cc = _lin(x, self.p[pre + "in_proj_c.weight"])
         dt = _lin(x, self.p[pre + "in_proj_dt.weight"])            # [b, s, m_heads]
+
+        if cache is not None:
+            # raw conv inputs (pre-conv), for warming the step's conv state
+            conv_raw = mx.concatenate([xx, bb, cc], axis=-1)        # [b, s, channels]
 
         xx = self._causal_conv(xx, self.p[pre + "conv_x.weight"], self.p[pre + "conv_x.bias"])
         bb = self._causal_conv(bb, self.p[pre + "conv_b.weight"], self.p[pre + "conv_b.bias"])
@@ -191,6 +235,11 @@ class BarbetMLX:
             y = mx.sum(state * c_pos[:, :, None, :], axis=-1) + d[None, :, None] * x_pos
             ys.append(y.reshape(b, self.inner))
         y = mx.stack(ys, axis=1)                                   # [b, s, inner]
+        if cache is not None:
+            # Warm the step's mamba state: conv sliding window (last d_conv raw
+            # inputs, NCL layout) + the final SSM recurrence state.
+            cache["conv"][i] = conv_raw[:, -self.d_conv:, :].transpose(0, 2, 1)   # [b, c, d_conv]
+            cache["ssm"][i] = state                                # [b, m_heads, hd, d_state]
 
         # rms-norm gated (manual grouped path).
         hg = y * _silu(z)
@@ -265,6 +314,87 @@ class BarbetMLX:
 
         out = (probs @ vv).transpose(0, 2, 1, 3).reshape(1, self.nh * self.hd)
         return _lin(out, self.p[pre + "o_proj.weight"])
+
+    def _mamba_src(self, name: str) -> mx.array:
+        """Return the fp32 version of a (possibly int4-packed) weight."""
+        a = self.p[name]
+        if a.dtype == mx.float32:
+            return a
+        ent = _QUANTIZED.get(id(a))
+        if ent is None:
+            raise KeyError(f"no quant entry for {name}")
+        q = ent["q"]
+        return mx.dequantize(q[0], q[1], q[2], group_size=q[3], bits=q[4])
+
+    def _mamba_fused(self, i: int) -> dict:
+        """Pre-fuse per-layer mamba tensors once (llama.cpp-style).
+
+        - the five in-projections are concatenated into ONE matrix (a single
+          GEMM per step instead of five), then requantized so the fused GEMM
+          still runs on the int4 kernel during AR decode;
+        - the three depthwise conv1d weights/biases are concatenated once
+          instead of every step.
+        """
+        cache = getattr(self, "_mamba_fused_cache", None)
+        if cache is None:
+            cache = {}
+            self._mamba_fused_cache = cache
+            self._fused_keepalive = []
+        ent = cache.get(i)
+        if ent is not None:
+            return ent
+        pre = f"layers.{i}.mixer."
+        w_all = mx.concatenate([
+            self._mamba_src(pre + "in_proj_x.weight"),
+            self._mamba_src(pre + "in_proj_b.weight"),
+            self._mamba_src(pre + "in_proj_c.weight"),
+            self._mamba_src(pre + "in_proj_z.weight"),
+            self._mamba_src(pre + "in_proj_dt.weight"),
+        ], axis=0)                                                    # [sum_out, H] fp32
+        conv_w = mx.concatenate([
+            self._mamba_src(pre + "conv_x.weight"), self._mamba_src(pre + "conv_b.weight"),
+            self._mamba_src(pre + "conv_c.weight")
+        ], axis=0)                                                    # [channels, 1, K]
+        conv_b = mx.concatenate([
+            self.p[pre + "conv_x.bias"], self.p[pre + "conv_b.bias"], self.p[pre + "conv_c.bias"]
+        ], axis=0)
+
+        # requantize the fused matrix so AR steps get the int4 kernel; keep the
+        # fp32 version as its prefill backup.
+        n_x = self.inner
+        n_b = self.m_groups * self.d_state          # per-projection size of b and c
+        n_z = self.inner
+        n_dt = self.m_heads
+        # concat order: x | b | c | z | dt -> cumulative split points
+        splits = [n_x, n_x + n_b, n_x + 2 * n_b, n_x + 2 * n_b + n_z]
+        fwq, fsc, fbi = mx.quantize(w_all, group_size=64, bits=4)
+        register_quantized(fwq, fsc, fbi, 64, 4, fp32_backup=w_all)
+
+        keep = self._fused_keepalive
+        keep.extend([conv_w.astype(mx.float32), conv_b])
+        ent = {"slot": fwq,                       # pass to _lin for dispatch
+               "conv_w": conv_w[:, 0, :].astype(mx.float32), "conv_b": conv_b,
+               "splits": splits}
+        cache[i] = ent
+        return ent
+
+    def _mamba_bias(self, i: int) -> Optional[mx.array]:
+        """Fused bias for the five in-projections (None if any lacks a bias)."""
+        key = "_fused_bias_" + str(i)
+        cached = getattr(self, key, None)
+        if cached is not None:
+            return cached
+        pre = f"layers.{i}.mixer."
+        biases = []
+        for name in ("in_proj_x", "in_proj_b", "in_proj_c", "in_proj_z", "in_proj_dt"):
+            b = self.p.get(pre + name + ".bias")
+            if b is None:
+                return None  # fused add requires all five to have biases
+            biases.append(b.astype(mx.float32))
+        cached = mx.concatenate(biases, axis=0)
+        setattr(self, key, cached)
+        self._fused_keepalive.append(cached)
+        return cached
 
     def _mamba_step(self, i: int, x: mx.array, cache: dict) -> mx.array:
         pre = f"layers.{i}.mixer."
@@ -345,7 +475,7 @@ class BarbetMLX:
         return mx.stack(outs, axis=1)
 
     # ------------------------------------------------------------------ #
-    def __call__(self, inputs_embeds: mx.array) -> mx.array:
+    def __call__(self, inputs_embeds: mx.array, cache=None) -> mx.array:
         b, s, _ = inputs_embeds.shape
         cos, sin = self._rope(s, b)
         h = inputs_embeds
@@ -353,10 +483,10 @@ class BarbetMLX:
             residual = h
             normed = _rms_norm(h, self.p[f"layers.{i}.input_layernorm.weight"], self.eps)
             if lt == "mamba":
-                mixed = self._mamba(i, normed)
+                mixed = self._mamba(i, normed, cache)
             else:
                 window = self.cfg.sliding_window_size if lt == "sliding_attention" else None
-                mixed = self._attn(i, normed, cos, sin, window)
+                mixed = self._attn(i, normed, cos, sin, window, cache)
             h = residual + mixed
             h = h + self._mlp(i, _rms_norm(h, self.p[f"layers.{i}.post_attention_layernorm.weight"], self.eps))
         return _rms_norm(h, self.p["norm.weight"], self.eps)

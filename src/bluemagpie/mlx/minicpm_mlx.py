@@ -62,7 +62,7 @@ class MiniCPMMLX:
         self._rope_cache[seq_len] = (cos, sin)
         return cos, sin
 
-    def _attn(self, i: int, x: mx.array, is_causal: bool) -> mx.array:
+    def _attn(self, i: int, x: mx.array, is_causal: bool, cache=None) -> mx.array:
         pre = f"layers.{i}.self_attn."
         b, s, _ = x.shape
         q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(b, s, self.nh, self.hd).transpose(0, 2, 1, 3)
@@ -72,6 +72,11 @@ class MiniCPMMLX:
             cos, sin = self._rope(s)                                       # [s, hd]
             q = q * cos[None, None] + _rotate_half(q) * sin[None, None]
             k = k * cos[None, None] + _rotate_half(k) * sin[None, None]
+        if cache is not None:
+            # Warm the decode KV cache (full prefix) so cached AR steps can
+            # continue from a full forward (fast prefill).
+            cache["k"][i] = k
+            cache["v"][i] = v
 
         # Fused Metal SDPA (handles GQA by broadcasting the kv heads), matching
         # the reference's torch SDPA with is_causal + enable_gqa.
@@ -88,21 +93,21 @@ class MiniCPMMLX:
             self.p[pre + "down_proj.weight"],
         )
 
-    def _layer(self, i: int, h: mx.array, is_causal: bool) -> mx.array:
+    def _layer(self, i: int, h: mx.array, is_causal: bool, cache=None) -> mx.array:
         pre = f"layers.{i}."
         scale = (self.scale_depth / math.sqrt(self.num_layers)) if self.use_mup else 1.0
         residual = h
-        mixed = self._attn(i, _rms_norm(h, self.p[pre + "input_layernorm.weight"], self.eps), is_causal)
+        mixed = self._attn(i, _rms_norm(h, self.p[pre + "input_layernorm.weight"], self.eps), is_causal, cache)
         h = residual + mixed * scale
         residual = h
         mlp = self._mlp(i, _rms_norm(h, self.p[pre + "post_attention_layernorm.weight"], self.eps))
         h = residual + mlp * scale
         return h
 
-    def __call__(self, inputs_embeds: mx.array, is_causal: bool = True) -> mx.array:
+    def __call__(self, inputs_embeds: mx.array, is_causal: bool = True, cache=None) -> mx.array:
         h = inputs_embeds
         for i in range(self.num_layers):
-            h = self._layer(i, h, is_causal)
+            h = self._layer(i, h, is_causal, cache)
         return _rms_norm(h, self.p["norm.weight"], self.eps)
 
     # ------------------------------------------------------------------ #
