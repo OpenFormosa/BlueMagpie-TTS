@@ -68,6 +68,52 @@ def register_quantized(wq: mx.array, scales: mx.array, biases, group_size: int, 
     _QUANTIZED[id(wq)] = {"q": (wq, scales, biases, group_size, bits), "fp32": fp32_backup}
 
 
+# Quantized embedding table, keyed by the id() of the packed weight. Gather
+# uses row-indexed dequantize (only the needed rows are unpacked).
+_QUANTIZED_EMBED: dict = {}
+
+
+def register_quantized_embed(wq: mx.array, scales: mx.array, biases,
+                             group_size: int = 64, bits: int = 4) -> None:
+    _QUANTIZED_EMBED[id(wq)] = {"q": (wq, scales, biases, group_size, bits)}
+
+
+def embed_take(embed_w: mx.array, ids: mx.array) -> mx.array:
+    """``embed_w[ids]`` with a transparent int4 path for quantized tables."""
+    ent = _QUANTIZED_EMBED.get(id(embed_w))
+    if ent is None:
+        return embed_w[ids]
+    wq, scales, biases, group, bits = ent["q"]
+    rows = wq[ids]
+    sc = scales[ids]
+    bi = biases[ids] if biases is not None else None
+    out = mx.dequantize(rows, scales=sc, biases=bi, group_size=group, bits=bits)
+    if out.dtype != embed_w.dtype and embed_w.dtype != mx.uint32:
+        out = out.astype(mx.float32)
+    return out
+
+
+def quantize_embed_inplace(mlx_model, group_size: int = 64, bits: int = 4) -> float:
+    """Quantize ``mlx_model.embed`` to grouped-affine in place.
+
+    Returns the RAM saved in MB. The token embedding is the largest remaining
+    fp32 blob (~700MB); gathers only dequantize the selected rows.
+    """
+    import mlx.core as mx
+
+    w = mlx_model.embed
+    if w.ndim != 2 or w.dtype != mx.float32:
+        return 0.0
+    vocab, dim = w.shape
+    if dim % group_size != 0 or vocab * dim < 50_000_000:
+        return 0.0
+    wq, scales, biases = mx.quantize(w, group_size=group_size, bits=bits)
+    register_quantized_embed(wq, scales, biases, group_size, bits)
+    mlx_model.embed = wq
+    saved = (vocab * dim * 4 - (wq.nbytes + scales.nbytes + biases.nbytes)) / 1024 / 1024
+    return saved
+
+
 def _rms_norm(x: mx.array, w: mx.array, eps: float) -> mx.array:
     v = mx.mean(x.astype(mx.float32) ** 2, axis=-1, keepdims=True)
     xn = x.astype(mx.float32) * mx.rsqrt(v + eps)

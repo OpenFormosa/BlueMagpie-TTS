@@ -346,6 +346,13 @@ def load_model(
     elif compute != "fp16":
         raise ValueError(f"compute must be 'fp32', 'fp16', 'int4' or 'int4-cached', got {compute!r}")
 
+    if compute in ("int4", "int4-cached") and os.environ.get("BM_EMBED_FP16", "1") == "1":
+        # fp16 embedding: halves RAM (674->337MB) with ~1e-4 latent drift
+        # (verified bit-safe vs int8/int4 embed variants; see scripts/ab_embed_*.py)
+        import mlx.core as mx
+        mlx_model.embed = mlx_model.embed.astype(mx.float16)
+        print("[lite] embedding -> fp16 (saved ~337 MB)")
+
     config = _load_config(model_dir)
 
     # Attach a torch AudioVAE (structure for the MLX decoder + torch fallback).

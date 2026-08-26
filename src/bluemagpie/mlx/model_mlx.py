@@ -110,7 +110,7 @@ class BlueMagpieMLX:
         feat_locenc = self.locenc(audio_feat)                       # [1, L, h_enc]
         feat_embed_tslm = _proj(feat_locenc, self.enc_tslm)
         feat_embed_lm = _proj(feat_locenc, self.enc_lm)
-        text_embed = mx.take(self.embed, text_token, axis=0)        # [1, L, Hb]
+        text_embed = _bm.embed_take(self.embed, text_token)          # [1, L, Hb] (int4-aware)
         combined = text_mask[..., None] * text_embed + audio_mask[..., None] * feat_embed_tslm
         if spk_mask is not None and speaker_centroids is not None:
             nw, pw, pb, eps = self.spk
@@ -208,7 +208,7 @@ class BlueMagpieMLX:
         feat_locenc = self.locenc(audio_feat)
         feat_embed_tslm = _proj(feat_locenc, self.enc_tslm)
         feat_embed_lm = _proj(feat_locenc, self.enc_lm)
-        text_embed = mx.take(self.embed, text_token, axis=0)
+        text_embed = _bm.embed_take(self.embed, text_token)
         combined = text_mask[..., None] * text_embed + audio_mask[..., None] * feat_embed_tslm
         if spk_mask is not None and speaker_centroids is not None:
             nw, pw, pb, eps = self.spk
@@ -298,7 +298,7 @@ class BlueMagpieMLX:
         feat_locenc = self.locenc(audio_feat)
         feat_embed_tslm = _proj(feat_locenc, self.enc_tslm)
         feat_embed_lm = _proj(feat_locenc, self.enc_lm)
-        text_embed = mx.take(self.embed, text_token, axis=0)
+        text_embed = _bm.embed_take(self.embed, text_token)
         combined = text_mask[..., None] * text_embed + audio_mask[..., None] * feat_embed_tslm
         if spk_mask is not None and speaker_centroids is not None:
             nw, pw, pb, eps = self.spk
