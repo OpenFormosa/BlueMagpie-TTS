@@ -38,3 +38,4 @@ _tts_smoke.py
 .DS_Store
 .idea/
 .vscode/
+*.pkl
