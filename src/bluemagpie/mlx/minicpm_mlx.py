@@ -118,28 +118,56 @@ class MiniCPMMLX:
     def init_cache(self) -> dict:
         return {"k": {}, "v": {}}
 
-    def _attn_step(self, i: int, x: mx.array, pos: int, cache: dict) -> mx.array:
+    def _attn_step(self, i: int, x: mx.array, pos, cache: dict) -> mx.array:
         pre = f"layers.{i}.self_attn."
-        q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(1, 1, self.nh, self.hd).transpose(0, 2, 1, 3)
-        k = _lin(x, self.p[pre + "k_proj.weight"]).reshape(1, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
-        v = _lin(x, self.p[pre + "v_proj.weight"]).reshape(1, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
+        b = x.shape[0]
+        q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(b, 1, self.nh, self.hd).transpose(0, 2, 1, 3)
+        k = _lin(x, self.p[pre + "k_proj.weight"]).reshape(b, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
+        v = _lin(x, self.p[pre + "v_proj.weight"]).reshape(b, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
         if not self.no_rope:
             cos, sin = self._rope(pos + 1)
-            cos = cos[pos][None, None, None]
-            sin = sin[pos][None, None, None]
-            q = q * cos + _rotate_half(q) * sin
-            k = k * cos + _rotate_half(k) * sin
         if i in cache["k"]:
             k = mx.concatenate([cache["k"][i], k], axis=2)
             v = mx.concatenate([cache["v"][i], v], axis=2)
         cache["k"][i] = k
         cache["v"][i] = v
-        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=1.0 / math.sqrt(self.hd), mask=None)
-        out = out.transpose(0, 2, 1, 3).reshape(1, self.nh * self.hd)
+        if not self.no_rope:
+            if isinstance(pos, mx.array):
+                # per-row rope at decode position pos[r]
+                cos_r = cos[pos][:, None, None, :]                    # [B,1,1,hd]
+                sin_r = sin[pos][:, None, None, :]
+                q = q * cos_r + _rotate_half(q) * sin_r
+                # re-apply rope to the just-appended key of each row
+                k_last = k[:, :, -1:, :]
+                k_last = k_last * cos_r + _rotate_half(k_last) * sin_r
+                k = mx.concatenate([k[:, :, :-1, :], k_last], axis=2)
+            else:
+                cos_p = cos[pos][None, None]
+                sin_p = sin[pos][None, None]
+                q = q * cos_p + _rotate_half(q) * sin_p
+                k_last = k[:, :, -1:, :]
+                k_last = k_last * cos_p + _rotate_half(k_last) * sin_p
+                k = mx.concatenate([k[:, :, :-1, :], k_last], axis=2)
+        kv_len = k.shape[2]
+        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=1.0 / math.sqrt(self.hd),
+                                                   mask=self._step_mask(kv_len, pos))
+        out = out.transpose(0, 2, 1, 3).reshape(b, self.nh * self.hd)
         return _lin(out, self.p[pre + "o_proj.weight"])
 
-    def step(self, x: mx.array, pos: int, cache: dict) -> mx.array:
-        """One decode step. ``x``: [1, H] at position ``pos`` -> [1, H]."""
+    def _step_mask(self, kv_len: int, pos):
+        """Causal mask for a single decode step; supports per-row positions.
+
+        Row r may attend keys [0 .. pos[r]] (positions beyond that are pads
+        or future slots). Returns None when all rows share the max position.
+        """
+        if not isinstance(pos, mx.array):
+            return None
+        kidx = mx.arange(kv_len)
+        allowed = kidx[None, :] <= pos[:, None]                       # [B, kv_len]
+        return allowed[:, None, None, :]
+
+    def step(self, x: mx.array, pos, cache: dict) -> mx.array:
+        """One decode step. ``x``: [B, H]; ``pos`` int or int array [B]."""
         h = x
         scale = (self.scale_depth / math.sqrt(self.num_layers)) if self.use_mup else 1.0
         for i in range(self.num_layers):

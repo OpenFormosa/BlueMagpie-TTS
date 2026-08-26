@@ -16,6 +16,7 @@ import math
 from typing import List, Optional
 
 import mlx.core as mx
+import numpy as np
 
 from . import barbet_mlx as _bm
 from .audiovae_mlx import AudioVAEMLX
@@ -181,6 +182,105 @@ class BlueMagpieMLX:
             pos += 1
 
         return mx.concatenate(patches, axis=0)                     # [T, p, d]
+
+    def inference_batch(self, text_token, audio_feat, text_mask, audio_mask, spk_mask=None,
+                        speaker_centroids=None, valid_lens=None, row_caps=None, max_len: int = 2000,
+                        inference_timesteps: int = 10, cfg_value: float = 2.0,
+                        expected_steps: int = 0,
+                        stop_prob_threshold: float = 0.65, stop_consecutive: int = 2) -> List[mx.array]:
+        """Batched AR generation (right-padded; voxcpm-rs contract).
+
+        ``valid_lens``: per-row prefill lengths. Each row's AR start hidden is
+        taken at its own ``len-1`` position, the attention caches carry a
+        key-padding mask over the pads, mamba states are captured at each
+        row's own last valid position, and decode positions are tracked
+        per-row (rope-correct).
+        Returns one latent stack ``[T_i, p, d]`` per row.
+        """
+        b = text_token.shape[0]
+        s_ctx = int(text_token.shape[1])
+        if valid_lens is None:
+            valid_lens = [s_ctx] * b
+        if row_caps is None:
+            row_caps = [max_len] * b
+
+        # ---- batched prefill ----
+        feat_locenc = self.locenc(audio_feat)
+        feat_embed_tslm = _proj(feat_locenc, self.enc_tslm)
+        feat_embed_lm = _proj(feat_locenc, self.enc_lm)
+        text_embed = mx.take(self.embed, text_token, axis=0)
+        combined = text_mask[..., None] * text_embed + audio_mask[..., None] * feat_embed_tslm
+        if spk_mask is not None and speaker_centroids is not None:
+            nw, pw, pb, eps = self.spk
+            spk_vec = _lin(_rms_norm(speaker_centroids, nw, eps), pw, pb)   # [1, Hb]
+            combined = combined + spk_vec[:, None, :] * spk_mask[..., None]
+
+        bcache = self.barbet.init_cache()
+        _bm._PREFILL_FP32[0] = True
+        barbet_hidden = self.barbet(combined, cache=bcache, valid_lens=valid_lens)
+        tslm_hidden = self.adapter(barbet_hidden)
+        enc_outputs = self.fsq(tslm_hidden) * audio_mask[..., None] + tslm_hidden * text_mask[..., None]
+        residual_inputs = _proj(
+            mx.concatenate([enc_outputs, audio_mask[..., None] * feat_embed_lm], axis=-1), self.fusion,
+        )
+        rcache = self.ralm.init_cache()
+        residual_seq = self.ralm(residual_inputs, cache=rcache)
+        _bm._PREFILL_FP32[0] = False
+
+        # per-row AR start hiddens at each row's own last valid position
+        lm_rows = [enc_outputs[r, valid_lens[r] - 1, :] for r in range(b)]
+        res_rows = [residual_seq[r, valid_lens[r] - 1, :] for r in range(b)]
+        lm_hidden = mx.stack(lm_rows, axis=0)                       # [B, Hv]
+        residual_hidden = mx.stack(res_rows, axis=0)                # [B, Hv]
+        prefix_feat_cond = audio_feat[:, -1, ...]                   # [B, p, d]
+
+        # per-row absolute positions (right padding -> row r starts at len_r-1)
+        pos_arr = np.array(valid_lens, dtype=np.int32)
+
+        t_span = self._t_span(inference_timesteps)
+        patches_b: List[List[mx.array]] = [[] for _ in range(b)]
+        stop_hits = [0] * b
+        alive = list(range(b))
+        for i in range(max_len):
+            pos_mx = mx.array(pos_arr)
+            dit_hidden = mx.concatenate([_proj(lm_hidden, self.lm_dit), _proj(residual_hidden, self.res_dit)], axis=-1)
+            cond = mx.transpose(prefix_feat_cond, (0, 2, 1))        # [B, d, p]
+            z = mx.random.normal((b, self.feat_dim, self.patch_size))
+            pred = solve_euler(self.dit, z, t_span, dit_hidden, cond, cfg_value)
+            pred_feat = mx.transpose(pred, (0, 2, 1))               # [B, p, d]
+
+            curr_locenc = self.locenc(pred_feat[:, None])           # [B, 1, p, d] -> [B, 1, h_enc]
+            curr_tslm = _proj(curr_locenc, self.enc_tslm)           # [B, 1, Hb]
+            curr_lm = _proj(curr_locenc, self.enc_lm)               # [B, 1, Hv]
+            for r in alive:
+                patches_b[r].append(pred_feat[r])
+            prefix_feat_cond = pred_feat
+
+            stop_logits = _lin(_silu(_lin(lm_hidden, self.stop_proj[0], self.stop_proj[1])), self.stop_head_w)
+            probs = mx.softmax(stop_logits.astype(mx.float32), axis=-1)   # [B, 2]
+
+            p_stop_np = np.array(probs)[:, 1]
+            newly_done = []
+            for r in alive:
+                if i <= 2:
+                    continue
+                stop_hits[r] = stop_hits[r] + 1 if p_stop_np[r] >= stop_prob_threshold else 0
+                capped = (expected_steps > 0 and (i + 1) >= int(expected_steps * 1.5)) \
+                    or (i + 1) >= row_caps[r]
+                if stop_hits[r] >= max(1, stop_consecutive) or capped:
+                    newly_done.append(r)
+            for r in newly_done:
+                alive.remove(r)
+            if not alive:
+                break
+
+            barbet_step = self.barbet.step(curr_tslm[:, 0, :], pos_mx, bcache)     # [B, Hb]
+            lm_hidden = self.fsq(self.adapter(barbet_step[:, None, :]))[:, 0, :]   # [B, Hv]
+            curr_residual = _proj(mx.concatenate([lm_hidden, curr_lm[:, 0, :]], axis=-1), self.fusion)
+            residual_hidden = self.ralm.step(curr_residual, pos_mx, rcache)        # [B, Hv]
+            pos_arr += 1
+
+        return [mx.stack(ps, axis=0) for ps in patches_b]
 
     def inference_stream(self, text_token, audio_feat, text_mask, audio_mask, spk_mask=None,
                          speaker_centroids=None, min_len: int = 2, max_len: int = 2000,
@@ -404,3 +504,78 @@ def mlx_generate_streaming(model, mlx_model: "BlueMagpieMLX", target_text: str, 
                 feat_pred = lt.permute(2, 0, 1).reshape(model.config.feat_dim, -1)[None]
                 decode_audio = vae_dec.decode_chunk(feat_pred.to(torch.float32))
                 yield decode_audio.squeeze(1).squeeze(0).cpu()
+
+
+def mlx_generate_batch(model, mlx_model: "BlueMagpieMLX", texts: List[str], *,
+                       speaker_centroid=None, max_len: int = 2000,
+                       inference_timesteps: int = 9, cfg_value: float = 2.8,
+                       seed: Optional[int] = None, robust_stop: bool = True):
+    """Generate several utterances in ONE batched AR pass (voxcpm-rs style).
+
+    Right-pads the per-text prefill inputs to a common length and passes
+    ``valid_lens`` so each row starts decoding from its own last real token
+    with its own absolute position. Returns a list of waveforms.
+    """
+    import numpy as np
+    import torch
+
+    if not texts:
+        return []
+    b = len(texts)
+
+    # ---- per-row inputs (no reference/prompt audio in batch mode) ----
+    slot = "centroid" if speaker_centroid is not None else "null"
+    rows_tt, rows_len, rows_exp = [], [], []
+    spk_rows = []
+
+    for t in texts:
+        text_token, audio_feat, text_mask, audio_mask, spk_mask_i = model._build_inputs(t, None, None, slot)
+        rows_tt.append(text_token.cpu().numpy())
+        rows_len.append(text_token.shape[0])
+        spk_rows.append(spk_mask_i.float().numpy())
+        n_chars = max(1, len(t))
+        rows_exp.append(min(max_len, int(n_chars * 1.5) + 6))
+    max_s = max(rows_len)
+
+    tt = np.zeros((b, max_s), dtype=np.int32)
+    txm = np.zeros((b, max_s), dtype=np.float32)
+    aum = np.zeros((b, max_s), dtype=np.float32)
+    sm_np = np.zeros((b, max_s), dtype=np.float32)
+    feat_rows = [model._build_inputs(t, None, None, slot)[1].float().numpy() for t in texts]
+    af = np.zeros((b, max_s, *feat_rows[0].shape[1:]), dtype=np.float32)
+    for i, (t_i, L) in enumerate(zip(rows_tt, rows_len)):
+        tt[i, :L] = t_i
+        txm[i, :L] = 1.0
+        af[i, :L] = feat_rows[i]
+        sm_np[i, :L] = spk_rows[i]
+
+    tt_mx = mx.array(tt)
+    af_mx = mx.array(af)                                           # [B, S, p, d]
+    txm_mx = mx.array(txm)
+    aum_mx = mx.array(aum)
+    sc = to_mx(speaker_centroid.reshape(1, -1).float()) if speaker_centroid is not None else None
+    sm = mx.array(sm_np) if sc is not None else None               # REAL per-row spk_mask
+    if seed is not None:
+        mx.random.seed(seed)
+
+    latents_b = mlx_model.inference_batch(
+        tt_mx, af_mx, txm_mx, aum_mx, spk_mask=sm, speaker_centroids=sc,
+        valid_lens=list(rows_len), row_caps=rows_exp,
+        max_len=max_len, inference_timesteps=inference_timesteps, cfg_value=cfg_value,
+        expected_steps=max(rows_exp),
+        stop_prob_threshold=0.65 if robust_stop else 0.0, stop_consecutive=2,
+    )                                                              # list of [T_i, p, d]
+
+    outs = []
+    for lat in latents_b:
+        if mlx_model.vae is not None:
+            audio = mlx_model.decode_latents(lat)                  # [T, p, d] -> [1, 1, samples]
+            mx.eval(audio)
+            outs.append(torch.from_numpy(np.array(audio)).squeeze(1).squeeze(0))
+        else:
+            mx.eval(lat)
+            lt = torch.from_numpy(np.array(lat))                   # [T, p, d]
+            feat_pred = lt.permute(2, 0, 1).reshape(model.config.feat_dim, -1)[None]
+            wav = model.audio_vae.decode(feat_pred.to(torch.float32)).squeeze(1).squeeze(0).cpu()
+            outs.append(wav)
+    return outs

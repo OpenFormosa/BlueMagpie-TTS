@@ -196,7 +196,7 @@ class BarbetMLX:
         acc = acc + bias[None, None, :]
         return _silu(acc)
 
-    def _mamba(self, i: int, x: mx.array, cache=None) -> mx.array:
+    def _mamba(self, i: int, x: mx.array, cache=None, valid_lens=None) -> mx.array:
         pre = f"layers.{i}.mixer."
         b, s, _ = x.shape
         z = _lin(x, self.p[pre + "in_proj_z.weight"])
@@ -223,6 +223,7 @@ class BarbetMLX:
 
         state = mx.zeros((b, self.m_heads, self.hd, self.d_state))
         ys = []
+        state_stack = [] if (cache is not None and valid_lens is not None) else None
         for pos in range(s):
             dt_pos = _softplus(dt[:, pos] + dt_bias)               # [b, m_heads]
             d_a = mx.exp(dt_pos * a)                               # [b, m_heads]
@@ -232,14 +233,30 @@ class BarbetMLX:
             state = state * d_a[:, :, None, None] + (
                 dt_pos[:, :, None, None] * b_pos[:, :, None, :] * x_pos[:, :, :, None]
             )
+            if state_stack is not None:
+                state_stack.append(state)
             y = mx.sum(state * c_pos[:, :, None, :], axis=-1) + d[None, :, None] * x_pos
             ys.append(y.reshape(b, self.inner))
         y = mx.stack(ys, axis=1)                                   # [b, s, inner]
         if cache is not None:
             # Warm the step's mamba state: conv sliding window (last d_conv raw
             # inputs, NCL layout) + the final SSM recurrence state.
-            cache["conv"][i] = conv_raw[:, -self.d_conv:, :].transpose(0, 2, 1)   # [b, c, d_conv]
-            cache["ssm"][i] = state                                # [b, m_heads, hd, d_state]
+            if valid_lens is not None:
+                # Right-padded batch: per-row windows/states taken at each
+                # row's own last VALID position (pad zeros never enter).
+                win = np.zeros((b, conv_raw.shape[-1], self.d_conv), dtype=np.float32)
+                st = np.zeros((b, self.m_heads, self.hd, self.d_state), dtype=np.float32)
+                for r, L in enumerate(valid_lens):
+                    Lr = int(min(L, s))
+                    lo, hi = max(0, Lr - self.d_conv), Lr
+                    seg = np.array(conv_raw[r, lo:hi]).T          # [c, hi-lo]
+                    win[r, :, self.d_conv - seg.shape[1]:] = seg  # right-aligned window
+                    st[r] = np.array(state_stack[Lr - 1])[r]      # state after token Lr-1
+                cache["conv"][i] = mx.array(win)                  # [b, c, d_conv]
+                cache["ssm"][i] = mx.array(st)
+            else:
+                cache["conv"][i] = conv_raw[:, -self.d_conv:, :].transpose(0, 2, 1)   # [b, c, d_conv]
+                cache["ssm"][i] = state                           # [b, m_heads, hd, d_state]
 
         # rms-norm gated (manual grouped path).
         hg = y * _silu(z)
@@ -264,18 +281,33 @@ class BarbetMLX:
         cache = {"k": {}, "v": {}, "conv": {}, "ssm": {}}
         return cache
 
-    def _rope_at(self, pos: int):
+    def _rope_at(self, pos):
+        """RoPE cos/sin at absolute position(s).
+
+        ``pos`` may be an int (batch-shared) or an integer array ``[B]`` for
+        per-row positions (right-padded batch decoding).
+        Returns cos, sin with shape ``[B, 1, hd]``.
+        """
+        if isinstance(pos, mx.array):
+            p = pos.astype(mx.float32)
+            if self.rope_scale and self.rope_scale > 1.0:
+                p = p / self.rope_scale
+            inv_freq = 1.0 / (self.cfg.rope_theta ** (mx.arange(0, self.hd, 2, dtype=mx.float32) / self.hd))
+            freqs = p[:, None] * inv_freq[None, :]                    # [B, hd/2]
+            emb = mx.concatenate([freqs, freqs], axis=-1)             # [B, hd]
+            return mx.cos(emb)[:, None], mx.sin(emb)[:, None]         # [B, 1, hd]
         p = pos / self.rope_scale if (self.rope_scale and self.rope_scale > 1.0) else pos
         inv_freq = 1.0 / (self.cfg.rope_theta ** (mx.arange(0, self.hd, 2, dtype=mx.float32) / self.hd))
         freqs = mx.array([float(p)])[:, None] * inv_freq[None, :]      # [1, hd/2]
         emb = mx.concatenate([freqs, freqs], axis=-1)                 # [1, hd]
         return mx.cos(emb)[None], mx.sin(emb)[None]                   # [1, 1, hd]
 
-    def _attn_step(self, i: int, x: mx.array, pos: int, cache: dict, window) -> mx.array:
+    def _attn_step(self, i: int, x: mx.array, pos, cache: dict, window) -> mx.array:
         pre = f"layers.{i}.mixer."
-        q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(1, 1, self.nh, self.hd).transpose(0, 2, 1, 3)
-        k = _lin(x, self.p[pre + "k_proj.weight"]).reshape(1, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
-        v = _lin(x, self.p[pre + "v_proj.weight"]).reshape(1, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
+        b = x.shape[0]
+        q = _lin(x, self.p[pre + "q_proj.weight"]).reshape(b, 1, self.nh, self.hd).transpose(0, 2, 1, 3)
+        k = _lin(x, self.p[pre + "k_proj.weight"]).reshape(b, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
+        v = _lin(x, self.p[pre + "v_proj.weight"]).reshape(b, 1, self.nkv, self.hd).transpose(0, 2, 1, 3)
         if self.cfg.qk_norm:
             q = _rms_norm(q, self.p[pre + "q_norm.weight"], self.eps)
             k = _rms_norm(k, self.p[pre + "k_norm.weight"], self.eps)
@@ -292,15 +324,22 @@ class BarbetMLX:
         kk = _repeat_kv(k, self.groups)
         vv = _repeat_kv(v, self.groups)
 
-        scores = (q @ kk.transpose(0, 1, 3, 2)) / math.sqrt(self.hd)   # [1, nh, 1, kv_len]
+        scores = (q @ kk.transpose(0, 1, 3, 2)) / math.sqrt(self.hd)   # [B, nh, 1, kv_len]
         if self.cfg.qk_logit_clip:
             thr = float(self.cfg.qk_clip_threshold)
             scores = thr * mx.tanh(scores / thr)
         kidx = mx.arange(kv_len)
-        allowed = kidx <= pos
-        if window is not None and window > 0:
-            allowed = allowed & (kidx >= (pos - window + 1))
-        scores = mx.where(allowed[None, None, None, :], scores, _F32_MIN)
+        if isinstance(pos, mx.array):
+            # per-row causal mask: row r may attend keys [0 .. pos[r]]
+            allowed = kidx[None, :] <= pos[:, None]                   # [B, kv_len]
+            if window is not None and window > 0:
+                allowed = allowed & (kidx[None, :] >= (pos[:, None] - window + 1))
+            scores = mx.where(allowed[:, None, None, :], scores, _F32_MIN)
+        else:
+            allowed = kidx <= pos
+            if window is not None and window > 0:
+                allowed = allowed & (kidx >= (pos - window + 1))
+            scores = mx.where(allowed[None, None, None, :], scores, _F32_MIN)
 
         if not self.cfg.attention_sink:
             probs = mx.softmax(scores.astype(mx.float32), axis=-1)
@@ -312,7 +351,7 @@ class BarbetMLX:
             sink_exp = mx.exp(sink - max_score)
             probs = real_exp / (mx.sum(real_exp, axis=-1, keepdims=True) + sink_exp)
 
-        out = (probs @ vv).transpose(0, 2, 1, 3).reshape(1, self.nh * self.hd)
+        out = (probs @ vv).transpose(0, 2, 1, 3).reshape(b, self.nh * self.hd)
         return _lin(out, self.p[pre + "o_proj.weight"])
 
     def _mamba_src(self, name: str) -> mx.array:
@@ -398,17 +437,18 @@ class BarbetMLX:
 
     def _mamba_step(self, i: int, x: mx.array, cache: dict) -> mx.array:
         pre = f"layers.{i}.mixer."
+        b = x.shape[0]
         z = _lin(x, self.p[pre + "in_proj_z.weight"])
         xx = _lin(x, self.p[pre + "in_proj_x.weight"])
         bb = _lin(x, self.p[pre + "in_proj_b.weight"])
         cc = _lin(x, self.p[pre + "in_proj_c.weight"])
         dt = _lin(x, self.p[pre + "in_proj_dt.weight"])
-        conv_inputs = mx.concatenate([xx, bb, cc], axis=-1)            # [1, channels]
+        conv_inputs = mx.concatenate([xx, bb, cc], axis=-1)            # [B, channels]
 
         channels = conv_inputs.shape[-1]
         conv_state = cache["conv"].get(i)
         if conv_state is None:
-            conv_state = mx.zeros((1, channels, self.d_conv))
+            conv_state = mx.zeros((b, channels, self.d_conv))
         conv_state = mx.roll(conv_state, -1, axis=-1)
         conv_state = mx.concatenate([conv_state[:, :, :-1], conv_inputs[:, :, None]], axis=-1)
         w = mx.concatenate([
@@ -424,38 +464,38 @@ class BarbetMLX:
         xx, bb, cc = mx.split(
             conv_out, [self.inner, self.inner + self.m_groups * self.d_state], axis=-1
         )
-        xx = xx.reshape(1, self.m_heads, self.hd)
-        bb = bb.reshape(1, self.m_groups, self.d_state)
-        cc = cc.reshape(1, self.m_groups, self.d_state)
-        z = z.reshape(1, self.m_heads, self.hd)
+        xx = xx.reshape(b, self.m_heads, self.hd)
+        bb = bb.reshape(b, self.m_groups, self.d_state)
+        cc = cc.reshape(b, self.m_groups, self.d_state)
+        z = z.reshape(b, self.m_heads, self.hd)
 
         a = -mx.exp(self.p[pre + "A_log"].astype(mx.float32))
         d = self.p[pre + "D"]
         dt_bias = self.p[pre + "dt_bias"]
-        dt_pos = _softplus(dt + dt_bias)                              # [1, m_heads]
+        dt_pos = _softplus(dt + dt_bias)                              # [B, m_heads]
         d_a = mx.exp(dt_pos * a)
-        b_pos = mx.take(bb, self.group_for_head, axis=1)             # [1, m_heads, d_state]
+        b_pos = mx.take(bb, self.group_for_head, axis=1)             # [B, m_heads, d_state]
         c_pos = mx.take(cc, self.group_for_head, axis=1)
 
         state = cache["ssm"].get(i)
         if state is None:
-            state = mx.zeros((1, self.m_heads, self.hd, self.d_state))
+            state = mx.zeros((b, self.m_heads, self.hd, self.d_state))
         state = state * d_a[:, :, None, None] + (dt_pos[:, :, None, None] * b_pos[:, :, None, :] * xx[:, :, :, None])
         y = mx.sum(state * c_pos[:, :, None, :], axis=-1) + d[None, :, None] * xx
         cache["ssm"][i] = state
 
-        y = y.reshape(1, 1, self.inner)
-        zg = z.reshape(1, 1, self.inner)
+        y = y.reshape(b, 1, self.inner)
+        zg = z.reshape(b, 1, self.inner)
         hg = y * _silu(zg)
-        grouped = hg.reshape(1, 1, self.m_groups, self.group_size)
+        grouped = hg.reshape(b, 1, self.m_groups, self.group_size)
         var = mx.mean(grouped.astype(mx.float32) ** 2, axis=-1, keepdims=True)
         grouped = grouped.astype(mx.float32) * mx.rsqrt(var + 1e-5)
         nw = self.p[pre + "norm.weight"].reshape(1, 1, self.m_groups, self.group_size).astype(mx.float32)
-        y = (grouped * nw).reshape(1, self.inner)
+        y = (grouped * nw).reshape(b, self.inner)
         return _lin(y, self.p[pre + "out_proj.weight"])
 
-    def step(self, x: mx.array, pos: int, cache: dict) -> mx.array:
-        """One decode step. ``x``: [1, H] at absolute position ``pos`` -> [1, H]."""
+    def step(self, x: mx.array, pos, cache: dict) -> mx.array:
+        """One decode step. ``x``: [B, H]; ``pos`` int or int array [B]."""
         h = x
         for i, lt in enumerate(self.layer_types):
             residual = h
@@ -475,7 +515,7 @@ class BarbetMLX:
         return mx.stack(outs, axis=1)
 
     # ------------------------------------------------------------------ #
-    def __call__(self, inputs_embeds: mx.array, cache=None) -> mx.array:
+    def __call__(self, inputs_embeds: mx.array, cache=None, valid_lens=None) -> mx.array:
         b, s, _ = inputs_embeds.shape
         cos, sin = self._rope(s, b)
         h = inputs_embeds
@@ -483,7 +523,7 @@ class BarbetMLX:
             residual = h
             normed = _rms_norm(h, self.p[f"layers.{i}.input_layernorm.weight"], self.eps)
             if lt == "mamba":
-                mixed = self._mamba(i, normed, cache)
+                mixed = self._mamba(i, normed, cache, valid_lens=valid_lens)
             else:
                 window = self.cfg.sliding_window_size if lt == "sliding_attention" else None
                 mixed = self._attn(i, normed, cos, sin, window, cache)
