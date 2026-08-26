@@ -272,7 +272,7 @@ def mlx_generate(model, mlx_model: "BlueMagpieMLX", target_text: str, *, prompt_
                  prompt_wav_path: str = "", reference_wav_path: str = "", speaker_centroid=None,
                  min_len: int = 2, max_len: int = 2000, inference_timesteps: int = 9, cfg_value: float = 2.8,
                  use_null_speaker: bool = True, seed: Optional[int] = None,
-                 robust_stop: bool = True):
+                 robust_stop: bool = True, target_cps: float = 0.0):
     """End-to-end MLX generate: torch input assembly + MLX AR loop + AudioVAE.
 
     ``model`` is the torch :class:`BlueMagpieModel` (used for tokenization, wav
@@ -319,13 +319,20 @@ def mlx_generate(model, mlx_model: "BlueMagpieMLX", target_text: str, *, prompt_
     if mlx_model.vae is not None:
         audio = mlx_model.decode_latents(latents)                  # [1, 1, samples] (torch-free)
         mx.eval(audio)
-        return torch.from_numpy(np.array(audio)).squeeze(1).squeeze(0)
+        wav = torch.from_numpy(np.array(audio)).squeeze(1).squeeze(0)
+    else:
+        mx.eval(latents)
+        lt = torch.from_numpy(np.array(latents))                   # [T, p, d]
+        feat_pred = lt.permute(2, 0, 1).reshape(model.config.feat_dim, -1)[None]  # [1, d, T*p]
+        wav = model.audio_vae.decode(feat_pred.to(torch.float32)).squeeze(1).squeeze(0).cpu()
 
-    mx.eval(latents)
-    lt = torch.from_numpy(np.array(latents))                       # [T, p, d]
-    feat_pred = lt.permute(2, 0, 1).reshape(model.config.feat_dim, -1)[None]  # [1, d, T*p]
-    decode_audio = model.audio_vae.decode(feat_pred.to(torch.float32))
-    return decode_audio.squeeze(1).squeeze(0).cpu()
+    if target_cps > 0.0:
+        from .pace import match_pace
+        import numpy as _np
+        sr = int(getattr(model, "sample_rate", 48000))
+        stretched = match_pace(wav.numpy(), sr, target_text, target_cps=target_cps)
+        return torch.from_numpy(stretched)
+    return wav
 
 
 def mlx_generate_streaming(model, mlx_model: "BlueMagpieMLX", target_text: str, *,
