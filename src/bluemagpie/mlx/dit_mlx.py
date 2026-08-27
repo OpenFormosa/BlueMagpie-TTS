@@ -66,12 +66,14 @@ def _optimized_scale(pos_flat: mx.array, neg_flat: mx.array) -> mx.array:
 
 
 def solve_euler(estimator: LocDiTMLX, x: mx.array, t_span: mx.array, mu: mx.array, cond: mx.array,
-                cfg_value: float, use_cfg_zero_star: bool = True) -> mx.array:
+                cfg_value: float, use_cfg_zero_star: bool = True,
+                zero_init_steps: "int | None" = None) -> mx.array:
     n_steps = t_span.shape[0]
+    if zero_init_steps is None:
+        zero_init_steps = max(1, int(n_steps * 0.04))
     t = t_span[0]
     dt = t_span[0] - t_span[1]
     b = x.shape[0]
-    zero_init_steps = max(1, int(n_steps * 0.04))
     for step in range(1, n_steps):
         if use_cfg_zero_star and step <= zero_init_steps:
             dphi = mx.zeros_like(x)
