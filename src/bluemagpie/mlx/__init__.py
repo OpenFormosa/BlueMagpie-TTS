@@ -21,7 +21,7 @@ the dev's own Mac. See `DESIGN.md`.
 
 from .convert import to_mx, torch_params_to_mx
 from .audiovae_mlx import AudioVAEMLX
-from .model_mlx import BlueMagpieMLX, mlx_generate, mlx_generate_streaming
+from .model_mlx import BlueMagpieMLX, mlx_generate, mlx_generate_streaming, mlx_generate_batch
 
 __all__ = [
     "to_mx",
@@ -29,5 +29,6 @@ __all__ = [
     "BlueMagpieMLX",
     "mlx_generate",
     "mlx_generate_streaming",
+    "mlx_generate_batch",
     "AudioVAEMLX",
 ]
