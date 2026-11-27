@@ -26,14 +26,14 @@ model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=Fals
 
 下載下來的模型目錄會包含以下檔案：
 
-- `pytorch_model.bin` —— 模型權重
-- `audiovae.pth` —— 音訊解碼器權重
-- `config.json` —— 模型設定
-- `tokenizer.json`、`tokenizer_config.json` —— 斷詞器
-- `README.md`、`USAGE.md` —— 說明文件
-- `release_metadata.json` —— 釋出資訊（checkpoint 版本與內部評測數據）
-- `checkpoints/speaker_centroids.pt` —— 內附的多語者向量表（`hung_yi_lee`、`female_voice` 兩個語者），用 `speaker_centroid` 指定音色
-- `checkpoints/hung_yi_lee_speaker_centroids.pt` —— 早期的單語者向量表（格式相同，仍可使用）
+- `pytorch_model.bin`：模型權重
+- `audiovae.pth`：音訊解碼器權重
+- `config.json`：模型設定
+- `tokenizer.json`、`tokenizer_config.json`：斷詞器
+- `README.md`、`USAGE.md`：說明文件
+- `release_metadata.json`：釋出資訊（checkpoint 版本與內部評測數據）
+- `checkpoints/speaker_centroids.pt`：內附的多語者向量表（`hung_yi_lee`、`female_voice` 兩個語者），用 `speaker_centroid` 指定音色
+- `checkpoints/hung_yi_lee_speaker_centroids.pt`：早期的單語者向量表（格式相同，仍可使用）
 
 `from_local` 會自動讀取這些檔案，你不需要手動處理。
 
